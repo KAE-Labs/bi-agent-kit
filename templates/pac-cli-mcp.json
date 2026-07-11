@@ -1,0 +1,11 @@
+{
+  "id": "pac-cli",
+  "label": "PAC CLI MCP",
+  "description": "Built in MCP server inside the Power Platform CLI itself, no separate npm package. Generally available feature.",
+  "config": {
+    "command": "pac",
+    "args": ["copilot", "mcp", "--run"],
+    "env": {}
+  },
+  "notes": "Requires the Power Platform CLI to already be installed and on PATH, with an existing pac auth create profile. Search learn.microsoft.com for Power Platform CLI installation if pac is not yet installed."
+}

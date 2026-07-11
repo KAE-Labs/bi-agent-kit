@@ -1,0 +1,11 @@
+{
+  "id": "fabric",
+  "label": "Fabric MCP",
+  "description": "Official Microsoft Fabric MCP server exposing Fabric REST APIs, OpenAPI specs, item definitions, and workspace operations. Distinct from the fab command line tool, which has no MCP mode. Npm package microsoft/fabric-mcp.",
+  "config": {
+    "command": "npx",
+    "args": ["-y", "@microsoft/fabric-mcp@latest", "server", "start", "--mode", "all"],
+    "env": {}
+  },
+  "notes": "Auth is interactive sign in at runtime, no environment variables required in this template."
+}

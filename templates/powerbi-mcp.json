@@ -1,0 +1,11 @@
+{
+  "id": "powerbi",
+  "label": "Power BI MCP",
+  "description": "Official Microsoft MCP server for Power BI semantic model authoring, TMSL and TOM operations. Public preview, npm package microsoft/powerbi-modeling-mcp.",
+  "config": {
+    "command": "npx",
+    "args": ["-y", "@microsoft/powerbi-modeling-mcp@latest", "--start"],
+    "env": {}
+  },
+  "notes": "Default auth is interactive sign in. For a service principal instead, add AZURE_CLIENT_ID, AZURE_TENANT_ID, and AZURE_CLIENT_SECRET to the env block after install."
+}

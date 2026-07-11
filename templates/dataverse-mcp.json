@@ -1,0 +1,11 @@
+{
+  "id": "dataverse",
+  "label": "Dataverse MCP",
+  "description": "Official Microsoft MCP proxy to the Dataverse hosted MCP endpoint. Generally available, npm package microsoft/dataverse.",
+  "config": {
+    "command": "npx",
+    "args": ["-y", "@microsoft/dataverse", "mcp", "REPLACE_WITH_YOUR_ORG_URL"],
+    "env": {}
+  },
+  "notes": "Replace REPLACE_WITH_YOUR_ORG_URL with your Dataverse environment URL after install, for example https://yourorg.crm.dynamics.com. Auth is interactive OAuth through the prebuilt Dataverse CLI app; a tenant admin must consent to it and enable it per environment first. Tool calls from non Copilot Studio clients bill against Copilot Credits unless the tenant already has qualifying licensing."
+}
