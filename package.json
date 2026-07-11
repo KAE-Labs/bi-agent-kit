@@ -1,0 +1,21 @@
+{
+  "name": "bi-agent-kit",
+  "version": "0.1.0",
+  "description": "Installs BI-related MCP server entries into AI coding tool configs, without clobbering anything else already there.",
+  "type": "module",
+  "bin": {
+    "bi-agent-kit": "./bin/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "0.9.1",
+    "smol-toml": "1.3.1",
+    "jsonc-parser": "3.3.1"
+  }
+}
