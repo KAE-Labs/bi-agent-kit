@@ -6,28 +6,44 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const templatesDir = path.join(here, "..", "templates");
-const FILES = ["powerbi-mcp.json", "dataverse-mcp.json", "pac-cli-mcp.json", "fabric-mcp.json"];
-const EXPECTED_IDS = ["powerbi", "dataverse", "pac-cli", "fabric"];
+const FILES = [
+  "powerbi-mcp.json",
+  "dataverse-mcp.json",
+  "pac-cli-mcp.json",
+  "fabric-mcp.json",
+  "azure-mcp.json",
+  "dbt-mcp.json",
+  "sqlserver-mcp.json",
+  "snowflake-mcp.json",
+];
+const EXPECTED_IDS = ["powerbi", "dataverse", "pac-cli", "fabric", "azure", "dbt", "sqlserver", "snowflake"];
 
 async function loadTemplate(filename) {
   const text = await fs.readFile(path.join(templatesDir, filename), "utf8");
   return JSON.parse(text);
 }
 
-test("all four template files parse as valid json with the required fields", async () => {
+test("all eight template files parse as valid json with the required fields", async () => {
   for (const file of FILES) {
     const template = await loadTemplate(file);
     assert.equal(typeof template.id, "string");
     assert.equal(typeof template.label, "string");
     assert.equal(typeof template.description, "string");
     assert.equal(typeof template.config, "object");
-    assert.equal(typeof template.config.command, "string");
-    assert.ok(Array.isArray(template.config.args));
-    assert.equal(typeof template.config.env, "object");
+    const isLocalLaunch = typeof template.config.command === "string";
+    const isRemote = typeof template.config.url === "string";
+    assert.ok(isLocalLaunch || isRemote, file + " config must have either command or url");
+    if (isLocalLaunch) {
+      assert.ok(Array.isArray(template.config.args));
+      assert.equal(typeof template.config.env, "object");
+    }
+    if (isRemote) {
+      assert.equal(typeof template.config.headers, "object");
+    }
   }
 });
 
-test("template ids match the expected four servers with no duplicates", async () => {
+test("template ids match the expected eight servers with no duplicates", async () => {
   const ids = [];
   for (const file of FILES) {
     const template = await loadTemplate(file);
@@ -36,11 +52,14 @@ test("template ids match the expected four servers with no duplicates", async ()
   assert.deepEqual(ids.sort(), [...EXPECTED_IDS].sort());
 });
 
-test("no template embeds a literal secret in its env block", async () => {
+test("no template embeds a literal secret in its env or headers block", async () => {
   for (const file of FILES) {
     const template = await loadTemplate(file);
-    for (const value of Object.values(template.config.env)) {
-      assert.match(String(value), /^REPLACE_|^\$\{/);
+    const values = Object.values(template.config.env || {}).concat(
+      Object.values(template.config.headers || {})
+    );
+    for (const value of values) {
+      assert.match(String(value), /REPLACE_|^\$\{/);
     }
   }
 });

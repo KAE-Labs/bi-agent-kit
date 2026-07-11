@@ -1,0 +1,11 @@
+{
+  "id": "azure",
+  "label": "Azure MCP",
+  "description": "Official Microsoft MCP server for Azure resource management (Storage, Key Vault, Cosmos DB, Azure SQL, and more), using the same credential chain as the az CLI. Actively shipping (beta), npm package @azure/mcp.",
+  "config": {
+    "command": "npx",
+    "args": ["-y", "@azure/mcp@latest", "server", "start"],
+    "env": {}
+  },
+  "notes": "Auth uses the standard Azure credential chain (az login, managed identity, or environment-based service principal credentials). No extra config required in this template for interactive use."
+}

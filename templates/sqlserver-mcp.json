@@ -1,0 +1,13 @@
+{
+  "id": "sqlserver",
+  "label": "SQL Server MCP",
+  "description": "Official Microsoft SQL MCP Server, built on Data API Builder. Covers Azure SQL, SQL Server, PostgreSQL, MySQL, and Cosmos DB. Requires the dab CLI (dotnet tool install microsoft.dataapibuilder) already installed and on PATH.",
+  "config": {
+    "command": "dab",
+    "args": ["start", "--mcp-stdio", "role:anonymous", "--loglevel", "error", "--config", "REPLACE_WITH_ABSOLUTE_PATH/dab-config.json"],
+    "env": {
+      "MSSQL_CONNECTION_STRING": "REPLACE_WITH_YOUR_CONNECTION_STRING"
+    }
+  },
+  "notes": "Requires a dab-config.json file (Data API Builder config) already set up alongside your database, see the Data API Builder quickstart docs. The connection string is referenced from dab-config.json via an env reference, not passed directly as a CLI arg."
+}

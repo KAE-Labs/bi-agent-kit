@@ -7,6 +7,11 @@ import {
   loadTemplates,
   getDetectedTargetGroups,
   getCurrentSelections,
+  findExternallyManagedEntries,
+  computeDiff,
+  collectPlaceholders,
+  applyPlaceholderValues,
+  describePlaceholder,
   applySelections,
   listInstalled,
 } from "../lib/commands.js";
@@ -53,14 +58,35 @@ async function runInteractive(command, dryRun) {
   const previousSelections = await getCurrentSelections({ dir });
   const previousKeys = new Set(previousSelections.map((s) => s.absPath + "::" + s.serverId));
 
+  const externallyManaged = await findExternallyManagedEntries({ dir, groups, templates });
+  const externallyManagedKeys = new Set(
+    externallyManaged.map((e) => e.absPath + "::" + e.serverId)
+  );
+  if (externallyManaged.length > 0) {
+    clack.log.warn(
+      "Skipping " + externallyManaged.length + " entry(ies) already configured outside bi-agent-kit, they will be left as is:"
+    );
+    for (const entry of externallyManaged) {
+      clack.log.info("  " + entry.serverId + " at " + entry.absPath);
+    }
+  }
+
   const options = [];
   for (const group of groups) {
     for (const template of templates) {
+      const value = group.absPath + "::" + template.id;
+      if (externallyManagedKeys.has(value)) continue;
       options.push({
-        value: group.absPath + "::" + template.id,
+        value,
         label: formatChoiceLabel(group, template),
       });
     }
+  }
+
+  if (options.length === 0) {
+    clack.log.warn("Every detected server slot is already configured outside bi-agent-kit. Nothing left to offer.");
+    clack.outro("Nothing to do.");
+    return;
   }
 
   const initialValues = options.map((o) => o.value).filter((value) => previousKeys.has(value));
@@ -77,10 +103,45 @@ async function runInteractive(command, dryRun) {
     process.exit(1);
   }
 
-  const selections = chosen.map((value) => {
+  const newSelections = chosen.map((value) => {
     const [absPath, serverId] = value.split("::");
     return { absPath, serverId };
   });
+
+  const { toAdd } = computeDiff({ previousSelections, newSelections });
+  const toAddKeys = new Set(toAdd.map((s) => s.absPath + "::" + s.serverId));
+
+  const selections = [];
+  for (const selection of newSelections) {
+    const key = selection.absPath + "::" + selection.serverId;
+    if (dryRun || !toAddKeys.has(key)) {
+      selections.push(selection);
+      continue;
+    }
+    const template = templates.find((t) => t.id === selection.serverId);
+    const placeholders = template ? collectPlaceholders(template.config) : [];
+    if (placeholders.length === 0) {
+      selections.push(selection);
+      continue;
+    }
+    clack.log.step("Setup needed for " + template.label + " at " + selection.absPath);
+    const answers = [];
+    for (const placeholder of placeholders) {
+      const answer = await clack.text({
+        message: describePlaceholder(placeholder.path, placeholder.value),
+        placeholder: placeholder.value,
+      });
+      if (clack.isCancel(answer)) {
+        clack.cancel("Cancelled.");
+        process.exit(1);
+      }
+      if (answer.trim().length > 0) {
+        answers.push({ path: placeholder.path, value: answer.trim() });
+      }
+    }
+    const configOverride = applyPlaceholderValues(template.config, answers);
+    selections.push({ ...selection, configOverride });
+  }
 
   const report = await applySelections({ dir, homedir, platform, templates, selections, dryRun });
 

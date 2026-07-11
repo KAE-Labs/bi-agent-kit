@@ -1,0 +1,12 @@
+{
+  "id": "snowflake",
+  "label": "Snowflake MCP",
+  "description": "Official Snowflake managed MCP server, replacing the deprecated Snowflake-Labs/mcp community project. Remote and hosted inside your Snowflake account; requires an MCP server object already created via CREATE MCP SERVER before this entry will work.",
+  "config": {
+    "url": "https://REPLACE_WITH_YOUR_ACCOUNT_IDENTIFIER.snowflakecomputing.com/api/v2/databases/REPLACE_WITH_YOUR_DATABASE/schemas/REPLACE_WITH_YOUR_SCHEMA/mcp-servers/REPLACE_WITH_YOUR_MCP_SERVER_NAME",
+    "headers": {
+      "Authorization": "Bearer REPLACE_WITH_YOUR_PAT_TOKEN"
+    }
+  },
+  "notes": "Remote server, not a local launch. Run CREATE MCP SERVER in Snowflake first to create the server object, then fill in the account identifier, database, schema, and server name in the URL. OAuth 2.0 is the recommended auth method for production; the placeholder above shows the simpler PAT quickstart path with a bearer token."
+}

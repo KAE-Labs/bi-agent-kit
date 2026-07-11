@@ -1,0 +1,14 @@
+{
+  "id": "dbt",
+  "label": "dbt MCP",
+  "description": "Official dbt Labs MCP server for build, run, docs, and lineage operations against a dbt project. Actively maintained, package dbt-mcp launched via uvx.",
+  "config": {
+    "command": "uvx",
+    "args": ["dbt-mcp"],
+    "env": {
+      "DBT_PROJECT_DIR": "REPLACE_WITH_ABSOLUTE_PATH_TO_DBT_PROJECT",
+      "DBT_PATH": "REPLACE_WITH_ABSOLUTE_PATH_TO_DBT_EXECUTABLE"
+    }
+  },
+  "notes": "Requires uv installed (https://docs.astral.sh/uv/). Set DBT_PROJECT_DIR and DBT_PATH for local CLI mode after install, or swap the env block for DBT_HOST, DBT_TOKEN, DBT_ACCOUNT_ID, and DBT_PROD_ENV_ID to use dbt Platform mode instead."
+}

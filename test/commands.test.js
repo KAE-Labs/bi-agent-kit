@@ -6,7 +6,11 @@ import os from "node:os";
 import {
   loadTemplates,
   getDetectedTargetGroups,
+  findExternallyManagedEntries,
   computeDiff,
+  collectPlaceholders,
+  applyPlaceholderValues,
+  describePlaceholder,
   applySelections,
   listInstalled,
 } from "../lib/commands.js";
@@ -15,10 +19,10 @@ async function makeTempDir() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "bi-agent-kit-commands-test-"));
 }
 
-test("loadTemplates returns the four expected server templates", async () => {
+test("loadTemplates returns the eight expected server templates", async () => {
   const templates = await loadTemplates();
   const ids = templates.map((t) => t.id).sort();
-  assert.deepEqual(ids, ["dataverse", "fabric", "pac-cli", "powerbi"]);
+  assert.deepEqual(ids, ["azure", "dataverse", "dbt", "fabric", "pac-cli", "powerbi", "snowflake", "sqlserver"]);
 });
 
 test("getDetectedTargetGroups only returns groups whose file or directory exists", async () => {
@@ -159,4 +163,124 @@ test("listInstalled returns an empty array when no manifest exists", async () =>
   const dir = await makeTempDir();
   const installed = await listInstalled({ dir });
   assert.deepEqual(installed, []);
+});
+
+test("findExternallyManagedEntries detects a key already present that bi-agent-kit does not own", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(
+    absPath,
+    "{\n  \"mcpServers\": {\n    \"powerbi\": { \"command\": \"hand configured\" }\n  }\n}\n",
+    "utf8"
+  );
+  const templates = await loadTemplates();
+  const groups = await getDetectedTargetGroups({ dir, homedir: dir, platform: "linux" });
+  const result = await findExternallyManagedEntries({ dir, groups, templates });
+  assert.ok(result.some((r) => r.absPath === absPath && r.serverId === "powerbi"));
+});
+
+test("findExternallyManagedEntries does not flag a key bi-agent-kit already owns", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "powerbi" }],
+    dryRun: false,
+  });
+  const groups = await getDetectedTargetGroups({ dir, homedir: dir, platform: "linux" });
+  const result = await findExternallyManagedEntries({ dir, groups, templates });
+  assert.equal(result.some((r) => r.absPath === absPath && r.serverId === "powerbi"), false);
+});
+
+test("applySelections never overwrites an externally managed entry even if selected", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(
+    absPath,
+    "{\n  \"mcpServers\": {\n    \"powerbi\": { \"command\": \"hand configured\" }\n  }\n}\n",
+    "utf8"
+  );
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "powerbi" }],
+    dryRun: false,
+  });
+  const fileText = await fs.readFile(absPath, "utf8");
+  assert.match(fileText, /hand configured/);
+});
+
+test("collectPlaceholders finds every REPLACE_ marked string anywhere in a nested config", () => {
+  const config = {
+    command: "npx",
+    args: ["-y", "pkg", "REPLACE_WITH_YOUR_ORG_URL"],
+    env: { TOKEN: "REPLACE_WITH_YOUR_TOKEN" },
+  };
+  const found = collectPlaceholders(config);
+  assert.equal(found.length, 2);
+  assert.deepEqual(
+    found.map((f) => f.path).sort(),
+    [["args", 2], ["env", "TOKEN"]].sort()
+  );
+});
+
+test("collectPlaceholders returns an empty array when no placeholders exist", () => {
+  const config = { command: "npx", args: ["-y", "pkg"], env: {} };
+  assert.deepEqual(collectPlaceholders(config), []);
+});
+
+test("applyPlaceholderValues substitutes only the given paths and leaves the rest untouched", () => {
+  const config = {
+    command: "npx",
+    args: ["-y", "pkg", "REPLACE_WITH_YOUR_ORG_URL"],
+    env: { TOKEN: "REPLACE_WITH_YOUR_TOKEN" },
+  };
+  const result = applyPlaceholderValues(config, [
+    { path: ["args", 2], value: "https://example.crm.dynamics.com" },
+    { path: ["env", "TOKEN"], value: "abc123" },
+  ]);
+  assert.deepEqual(result, {
+    command: "npx",
+    args: ["-y", "pkg", "https://example.crm.dynamics.com"],
+    env: { TOKEN: "abc123" },
+  });
+  assert.equal(config.args[2], "REPLACE_WITH_YOUR_ORG_URL");
+});
+
+test("describePlaceholder produces a human readable prompt from a REPLACE_WITH_ style marker", () => {
+  const message = describePlaceholder(["args", 2], "REPLACE_WITH_YOUR_ORG_URL");
+  assert.match(message, /your org url/);
+  assert.match(message, /args\.2/);
+});
+
+test("applySelections applies a configOverride instead of the raw template when provided", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [
+      {
+        absPath,
+        serverId: "dataverse",
+        configOverride: { command: "npx", args: ["-y", "@microsoft/dataverse", "mcp", "https://filled-in.example.com"], env: {} },
+      },
+    ],
+    dryRun: false,
+  });
+  const fileText = await fs.readFile(absPath, "utf8");
+  assert.match(fileText, /filled-in\.example\.com/);
+  assert.doesNotMatch(fileText, /REPLACE_WITH_YOUR_ORG_URL/);
 });
