@@ -1,2 +1,6 @@
 node_modules/
 *.log
+CLAUDE.md
+docs/superpowers/
+ruvector.db
+.fablize
