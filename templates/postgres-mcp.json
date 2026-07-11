@@ -2,6 +2,7 @@
   "id": "postgres",
   "label": "Postgres MCP",
   "description": "No first-party Postgres MCP server exists; Anthropic's own reference postgres server was moved to the archived, no-longer-maintained servers repo. This is the best-maintained, most widely-adopted community alternative instead: Postgres MCP Pro by Crystal DBA, package postgres-mcp, works against any Postgres database (not tied to a single cloud vendor).",
+  "requiresBinary": "uvx",
   "config": {
     "command": "uvx",
     "args": ["postgres-mcp", "--access-mode=restricted"],
