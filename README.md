@@ -58,14 +58,17 @@ Add `--dry-run` to `init` or `configure` to preview exactly what would be writte
 | **dbt MCP** | Build, run, docs, and lineage for a dbt project | [dbt-labs/dbt-mcp](https://github.com/dbt-labs/dbt-mcp) |
 | **SQL Server MCP** | Azure SQL, SQL Server, PostgreSQL, MySQL, and Cosmos DB via Data API Builder | [SQL MCP Server quickstart](https://learn.microsoft.com/en-us/azure/data-api-builder/mcp/quickstart-visual-studio-code) |
 | **Snowflake MCP** | Snowflake-managed remote MCP server (Cortex Agents) | [Snowflake MCP Server docs](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-mcp) |
+| **Postgres MCP** | Postgres database inspection, query, and index-tuning (Postgres MCP Pro) | [crystaldba/postgres-mcp](https://github.com/crystaldba/postgres-mcp) |
 
-All eight are official, first-party servers from Microsoft or Snowflake, or maintained directly by the tool vendor (dbt Labs). None are community forks or roadmap-only.
+Eight of the nine are official, first-party servers from Microsoft or Snowflake, or maintained directly by the tool vendor (dbt Labs). Postgres MCP is the best-maintained community alternative, since no first-party Postgres MCP server exists. None are roadmap-only.
 
 ## Safety
 
-`bi-agent-kit` never overwrites a config entry it does not already own. Before writing, it checks every target for a server already configured under the same name -- if you already have it set up by hand, or by some other tool, `bi-agent-kit` skips that entry entirely and leaves it exactly as it is, rather than overwriting or duplicating it. Every write is atomic, and the first time a target file is touched, a backup copy is kept alongside it.
+`bi-agent-kit` never overwrites a config entry it does not already own. Before writing, it checks every target for a server already configured under the same name -- if you already have it set up by hand, or by some other tool, `bi-agent-kit` skips that entry entirely and leaves it exactly as it is, rather than overwriting or duplicating it. Every write is atomic, and the first time a target file is touched, a backup copy is kept in a `.bi-agent-kit-backups/` directory next to it.
 
-If a config file you are about to run `init` against already has hand-configured secrets in it, make sure your `.gitignore` covers `*.bak` before running.
+That backups directory writes its own `.gitignore` (`*`) the first time it is created, so backups -- including any hand-configured secrets a pre-existing config file already had in it -- are excluded from version control regardless of your own `.gitignore` state.
+
+Servers that require an external CLI to already be installed (PAC CLI for PAC CLI MCP, the `dab` CLI for SQL Server MCP) are flagged inline in the picker with a "not found on PATH" label if that CLI is not detected -- they are still offered, since you may install it before running the picker again, but the warning makes the missing prerequisite visible up front.
 
 ## License
 

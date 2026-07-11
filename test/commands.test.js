@@ -19,10 +19,10 @@ async function makeTempDir() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "bi-agent-kit-commands-test-"));
 }
 
-test("loadTemplates returns the eight expected server templates", async () => {
+test("loadTemplates returns the nine expected server templates", async () => {
   const templates = await loadTemplates();
   const ids = templates.map((t) => t.id).sort();
-  assert.deepEqual(ids, ["azure", "dataverse", "dbt", "fabric", "pac-cli", "powerbi", "snowflake", "sqlserver"]);
+  assert.deepEqual(ids, ["azure", "dataverse", "dbt", "fabric", "pac-cli", "postgres", "powerbi", "snowflake", "sqlserver"]);
 });
 
 test("getDetectedTargetGroups only returns groups whose file or directory exists", async () => {

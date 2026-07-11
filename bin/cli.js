@@ -15,6 +15,7 @@ import {
   applySelections,
   listInstalled,
 } from "../lib/commands.js";
+import { isBinaryOnPath } from "../lib/prereq-check.js";
 
 export function parseArgs(argv) {
   const args = argv.slice(2);
@@ -71,14 +72,28 @@ async function runInteractive(command, dryRun) {
     }
   }
 
+  const missingBinaries = new Set();
+  for (const template of templates) {
+    if (!template.requiresBinary) continue;
+    const found = await isBinaryOnPath(template.requiresBinary);
+    if (!found) missingBinaries.add(template.requiresBinary);
+  }
+  for (const binaryName of missingBinaries) {
+    clack.log.warn(binaryName + " was not found on PATH -- servers that require it will be flagged in the picker below.");
+  }
+
   const options = [];
   for (const group of groups) {
     for (const template of templates) {
       const value = group.absPath + "::" + template.id;
       if (externallyManagedKeys.has(value)) continue;
+      let label = formatChoiceLabel(group, template);
+      if (template.requiresBinary && missingBinaries.has(template.requiresBinary)) {
+        label += " (requires " + template.requiresBinary + " on PATH, not found)";
+      }
       options.push({
         value,
-        label: formatChoiceLabel(group, template),
+        label,
       });
     }
   }

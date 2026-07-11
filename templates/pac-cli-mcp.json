@@ -2,6 +2,7 @@
   "id": "pac-cli",
   "label": "PAC CLI MCP",
   "description": "Built in MCP server inside the Power Platform CLI itself, no separate npm package. Generally available feature.",
+  "requiresBinary": "pac",
   "config": {
     "command": "pac",
     "args": ["copilot", "mcp", "--run"],

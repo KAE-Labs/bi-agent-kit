@@ -68,7 +68,10 @@ test("addServerToTarget backs up the file on first touch only", async () => {
     serverKey: "powerbi",
     serverValue: { command: "npx" },
   });
-  const backup = await fs.readFile(absPath + ".bak", "utf8");
+  const backup = await fs.readFile(
+    path.join(dir, ".bi-agent-kit-backups", ".mcp.json"),
+    "utf8"
+  );
   assert.match(backup, /"mcpServers": \{\}/);
 });
 

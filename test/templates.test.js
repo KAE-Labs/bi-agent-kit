@@ -15,15 +15,16 @@ const FILES = [
   "dbt-mcp.json",
   "sqlserver-mcp.json",
   "snowflake-mcp.json",
+  "postgres-mcp.json",
 ];
-const EXPECTED_IDS = ["powerbi", "dataverse", "pac-cli", "fabric", "azure", "dbt", "sqlserver", "snowflake"];
+const EXPECTED_IDS = ["powerbi", "dataverse", "pac-cli", "fabric", "azure", "dbt", "sqlserver", "snowflake", "postgres"];
 
 async function loadTemplate(filename) {
   const text = await fs.readFile(path.join(templatesDir, filename), "utf8");
   return JSON.parse(text);
 }
 
-test("all eight template files parse as valid json with the required fields", async () => {
+test("all nine template files parse as valid json with the required fields", async () => {
   for (const file of FILES) {
     const template = await loadTemplate(file);
     assert.equal(typeof template.id, "string");
@@ -43,7 +44,7 @@ test("all eight template files parse as valid json with the required fields", as
   }
 });
 
-test("template ids match the expected eight servers with no duplicates", async () => {
+test("template ids match the expected nine servers with no duplicates", async () => {
   const ids = [];
   for (const file of FILES) {
     const template = await loadTemplate(file);
