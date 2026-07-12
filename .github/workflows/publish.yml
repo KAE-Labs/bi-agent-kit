@@ -8,7 +8,22 @@ on:
     types: [published]
 
 jobs:
+  # Tests run in a job with no id-token permission, so dependency install
+  # and the test suite never execute within OIDC-credential reach.
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - run: npm ci
+      - run: npm test
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -19,8 +34,10 @@ jobs:
         with:
           node-version: 22.x
           registry-url: https://registry.npmjs.org
-      # OIDC trusted publishing requires npm 11.5.1+; Node 22 bundles npm 10.x
-      - run: npm install -g npm@latest
-      - run: npm ci
-      - run: npm test
+      # OIDC trusted publishing requires npm 11.5.1+; Node 22 bundles npm 10.x.
+      # Pinned exactly — the tool that holds publish rights must not float.
+      - run: npm install -g npm@12.0.1
+      # --ignore-scripts: no dependency lifecycle script runs inside the
+      # OIDC-scoped job (deps are exercised in the test job above instead).
+      - run: npm ci --ignore-scripts
       - run: npm publish
