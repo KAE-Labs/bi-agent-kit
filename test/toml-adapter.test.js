@@ -63,3 +63,35 @@ test("removeTomlServer preserves a later top level table when removing an earlie
   assert.match(result, /\[other_table\]/);
   assert.match(result, /key = "value"/);
 });
+
+test("setTomlServer called twice on the same file produces valid parseable TOML", () => {
+  let fileText = setTomlServer("", "bar", { command: "x" });
+  fileText = setTomlServer(fileText, "foo", { command: "y" });
+  const parsed = parse(fileText);
+  assert.deepEqual(parsed.mcp_servers.bar, { command: "x" });
+  assert.deepEqual(parsed.mcp_servers.foo, { command: "y" });
+  const bareHeaders = fileText.split("\n").filter((l) => l.trim() === "[mcp_servers]").length;
+  assert.ok(bareHeaders <= 1, "must not emit duplicate [mcp_servers] parent headers");
+});
+
+test("removeTomlServer removes nested sub-tables like env along with the server block", () => {
+  const fileText = setTomlServer("", "pg", { command: "uvx", env: { DATABASE_URI: "secret" } });
+  const result = removeTomlServer(fileText, "pg");
+  assert.deepEqual(readTomlServers(result), {});
+  assert.doesNotMatch(result, /DATABASE_URI/);
+  assert.doesNotMatch(result, /secret/);
+});
+
+test("removeTomlServer with sub-tables preserves a sibling server defined after them", () => {
+  let fileText = setTomlServer("", "pg", { command: "uvx", env: { A: "1" } });
+  fileText = setTomlServer(fileText, "other", { command: "z" });
+  const result = removeTomlServer(fileText, "pg");
+  const remaining = readTomlServers(result);
+  assert.deepEqual(remaining, { other: { command: "z" } });
+});
+
+test("removeTomlServer matches a header line that carries a trailing comment", () => {
+  const fileText = "[mcp_servers.foo] # installed by hand\ncommand = \"a\"\n";
+  const result = removeTomlServer(fileText, "foo");
+  assert.deepEqual(readTomlServers(result), {});
+});

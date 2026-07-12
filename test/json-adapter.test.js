@@ -61,3 +61,9 @@ test("removeJsonServer is a no-op when the key does not exist", () => {
 test("readJsonServers throws MalformedConfigError on invalid json content", () => {
   assert.throws(() => readJsonServers("not valid json", "mcpServers"), MalformedConfigError);
 });
+
+test("readJsonServers tolerates a leading UTF-8 BOM in windows-authored files", () => {
+  const bom = String.fromCharCode(0xfeff);
+  const text = bom + "{\"mcpServers\": {\"foo\": {\"command\": \"npx\"}}}";
+  assert.deepEqual(readJsonServers(text, "mcpServers"), { foo: { command: "npx" } });
+});
