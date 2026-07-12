@@ -38,13 +38,15 @@ Add `--dry-run` to `init` or `configure` to preview exactly what would be writte
 
 | Tool | Scope |
 |---|---|
-| Claude Code | project |
+| Claude Code | project + user |
 | Claude Desktop | user |
 | Cursor | project + user |
 | Gemini CLI | project + user |
 | GitHub Copilot CLI | project + user |
 | GitHub Copilot -- VS Code extension | workspace + user |
 | OpenAI Codex CLI | project + user |
+
+The Claude Code VS Code extension shares the CLI's configuration files, so Claude Code support covers the extension automatically.
 
 ## Supported BI servers
 
@@ -68,7 +70,17 @@ Eight of the nine are official, first-party servers from Microsoft or Snowflake,
 
 That backups directory writes its own `.gitignore` (`*`) the first time it is created, so backups -- including any hand-configured secrets a pre-existing config file already had in it -- are excluded from version control regardless of your own `.gitignore` state.
 
-Servers that require an external CLI to already be installed (PAC CLI for PAC CLI MCP, the `dab` CLI for SQL Server MCP) are flagged inline in the picker with a "not found on PATH" label if that CLI is not detected -- they are still offered, since you may install it before running the picker again, but the warning makes the missing prerequisite visible up front.
+Servers that require an external CLI to already be installed (PAC CLI for PAC CLI MCP, the `dab` CLI for SQL Server MCP, `uvx` for Postgres MCP) are flagged inline in the picker with a "not found on PATH" label if that CLI is not detected -- they are still offered, since you may install it before running the picker again, but the warning makes the missing prerequisite visible up front.
+
+If you answer a setup question with a value that looks like a secret (a connection string, token, key, PAT, secret, or password), and it gets written into a config file inside your project, `bi-agent-kit` checks whether that file is gitignored and prints a warning if it is not, so you notice before committing a credential.
+
+## Prerequisite setup
+
+When `init` or `configure` finds a required CLI (`pac`, `dab`, or `uvx`) missing from PATH, it offers to install it for you right there in the picker -- confirm and it runs the appropriate command for your platform (a `dotnet tool install` for `pac`/`dab`, the official installer script for `uvx`), then re-checks PATH and reports success or failure. Decline and it falls back to the existing inline "not found on PATH" label.
+
+After PAC CLI MCP is installed or detected and configured, `bi-agent-kit` also offers to walk you through a `pac auth` profile: it runs `pac auth list` so you can see what is already configured, and if you confirm, offers to run `pac auth create` (optionally scoped to an environment URL you provide) -- this opens an interactive browser login, so a note is printed before it starts.
+
+`--dry-run` skips all of this: no install offers, no `pac auth` walkthrough, and no setup questions are asked.
 
 ## License
 

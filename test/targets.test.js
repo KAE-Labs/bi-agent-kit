@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { resolveTargets, TARGET_DEFINITIONS } from "../lib/targets.js";
 
-test("TARGET_DEFINITIONS has 12 logical target entries", () => {
-  assert.equal(TARGET_DEFINITIONS.length, 12);
+test("TARGET_DEFINITIONS has 13 logical target entries", () => {
+  assert.equal(TARGET_DEFINITIONS.length, 13);
 });
 
 test("resolveTargets dedupes claude-code and copilot-cli-project onto one entry", () => {
@@ -41,4 +41,19 @@ test("resolveTargets assigns the toml shape to codex targets", () => {
   const results = resolveTargets("/proj", "/home/test", "linux");
   const found = results.find((r) => r.targetIds.includes("codex-project"));
   assert.equal(found.shape, "toml");
+});
+
+test("resolveTargets resolves claude-code-user to homedir/.claude.json without merging into the project .mcp.json group", () => {
+  const results = resolveTargets("/proj", "/home/test", "linux");
+  const userTarget = results.find((r) => r.targetIds.includes("claude-code-user"));
+  assert.ok(userTarget);
+  assert.equal(userTarget.absPath, path.join("/home/test", ".claude.json"));
+  assert.equal(userTarget.rootKey, "mcpServers");
+  assert.equal(userTarget.rootLevel, true);
+  assert.equal(userTarget.targetIds.length, 1);
+
+  const projectGroup = results.find((r) => r.targetIds.includes("claude-code"));
+  assert.ok(projectGroup);
+  assert.ok(!projectGroup.targetIds.includes("claude-code-user"));
+  assert.notEqual(projectGroup.absPath, userTarget.absPath);
 });

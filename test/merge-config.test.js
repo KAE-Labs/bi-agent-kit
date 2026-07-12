@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { addServerToTarget, removeServerFromTarget, CollisionError } from "../lib/merge-config.js";
 import { readManifest } from "../lib/manifest.js";
+import { SymlinkRefusedError } from "../lib/atomic-fs.js";
 
 async function makeTempDir() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "bi-agent-kit-merge-test-"));
@@ -181,6 +182,54 @@ test("addServerToTarget works for the toml shape and preserves unrelated content
   assert.match(fileText, /# keep this comment/);
   assert.match(fileText, /profile = "default"/);
   assert.match(fileText, /mcp_servers.powerbi/);
+});
+
+test("addServerToTarget refuses a target whose parent directory is a symlink into the host filesystem", async (t) => {
+  const dir = await makeTempDir();
+  const outsideDir = path.join(dir, "outside-project");
+  await fs.mkdir(outsideDir, { recursive: true });
+  await fs.writeFile(path.join(outsideDir, "hosts"), "sensitive host content", "utf8");
+
+  const projectDir = path.join(dir, "project");
+  const linkedDir = path.join(projectDir, ".cursor");
+  await fs.mkdir(projectDir, { recursive: true });
+
+  try {
+    await fs.symlink(outsideDir, linkedDir, "junction");
+  } catch {
+    t.skip("symlink/junction creation not permitted in this environment");
+    return;
+  }
+
+  const absPath = path.join(linkedDir, "hosts");
+  const target = jsonTarget(absPath, ["some-target"]);
+
+  await assert.rejects(
+    () =>
+      addServerToTarget({
+        dir: projectDir,
+        resolvedTarget: target,
+        serverKey: "powerbi",
+        serverValue: { command: "npx" },
+      }),
+    SymlinkRefusedError
+  );
+
+  const outsideContent = await fs.readFile(path.join(outsideDir, "hosts"), "utf8");
+  assert.equal(outsideContent, "sensitive host content");
+});
+
+test("addServerToTarget is unaffected by symlink protection for normal, non-symlinked operation", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, "nested", ".mcp.json");
+  const target = jsonTarget(absPath, ["claude-code"]);
+  const result = await addServerToTarget({
+    dir,
+    resolvedTarget: target,
+    serverKey: "powerbi",
+    serverValue: { command: "npx" },
+  });
+  assert.equal(result.status, "written");
 });
 
 test("a run that fails partway through leaves the manifest matching exactly what was written", async () => {

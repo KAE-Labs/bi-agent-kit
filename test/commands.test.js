@@ -230,11 +230,36 @@ test("collectPlaceholders finds every REPLACE_ marked string anywhere in a neste
     found.map((f) => f.path).sort(),
     [["args", 2], ["env", "TOKEN"]].sort()
   );
+  const argsEntry = found.find((f) => f.path.join(".") === "args.2");
+  assert.equal(argsEntry.value, "REPLACE_WITH_YOUR_ORG_URL");
+  assert.equal(argsEntry.token, "REPLACE_WITH_YOUR_ORG_URL");
+  const envEntry = found.find((f) => f.path.join(".") === "env.TOKEN");
+  assert.equal(envEntry.value, "REPLACE_WITH_YOUR_TOKEN");
+  assert.equal(envEntry.token, "REPLACE_WITH_YOUR_TOKEN");
 });
 
 test("collectPlaceholders returns an empty array when no placeholders exist", () => {
   const config = { command: "npx", args: ["-y", "pkg"], env: {} };
   assert.deepEqual(collectPlaceholders(config), []);
+});
+
+test("collectPlaceholders returns one entry per token when a single string holds multiple REPLACE_ markers", () => {
+  const config = {
+    url: "https://REPLACE_WITH_YOUR_ACCOUNT_IDENTIFIER.snowflakecomputing.com/api/v2/databases/REPLACE_WITH_YOUR_DATABASE/schemas/REPLACE_WITH_YOUR_SCHEMA/mcp-servers/REPLACE_WITH_YOUR_MCP_SERVER_NAME",
+  };
+  const found = collectPlaceholders(config);
+  assert.equal(found.length, 4);
+  assert.deepEqual(
+    found.map((f) => f.token),
+    [
+      "REPLACE_WITH_YOUR_ACCOUNT_IDENTIFIER",
+      "REPLACE_WITH_YOUR_DATABASE",
+      "REPLACE_WITH_YOUR_SCHEMA",
+      "REPLACE_WITH_YOUR_MCP_SERVER_NAME",
+    ]
+  );
+  assert.ok(found.every((f) => f.value === config.url));
+  assert.ok(found.every((f) => f.path.join(".") === "url"));
 });
 
 test("applyPlaceholderValues substitutes only the given paths and leaves the rest untouched", () => {
@@ -244,8 +269,8 @@ test("applyPlaceholderValues substitutes only the given paths and leaves the res
     env: { TOKEN: "REPLACE_WITH_YOUR_TOKEN" },
   };
   const result = applyPlaceholderValues(config, [
-    { path: ["args", 2], value: "https://example.crm.dynamics.com" },
-    { path: ["env", "TOKEN"], value: "abc123" },
+    { path: ["args", 2], token: "REPLACE_WITH_YOUR_ORG_URL", value: "https://example.crm.dynamics.com" },
+    { path: ["env", "TOKEN"], token: "REPLACE_WITH_YOUR_TOKEN", value: "abc123" },
   ]);
   assert.deepEqual(result, {
     command: "npx",
@@ -255,7 +280,61 @@ test("applyPlaceholderValues substitutes only the given paths and leaves the res
   assert.equal(config.args[2], "REPLACE_WITH_YOUR_ORG_URL");
 });
 
-test("describePlaceholder produces a human readable prompt from a REPLACE_WITH_ style marker", () => {
+test("applyPlaceholderValues splices all four tokens of the real snowflake template URL, preserving surrounding structure", async () => {
+  const templates = await loadTemplates();
+  const snowflake = templates.find((t) => t.id === "snowflake");
+  const placeholders = collectPlaceholders(snowflake.config);
+  const urlPlaceholders = placeholders.filter((p) => p.path.join(".") === "url");
+  assert.equal(urlPlaceholders.length, 4);
+
+  const answerValues = {
+    REPLACE_WITH_YOUR_ACCOUNT_IDENTIFIER: "acme-prod",
+    REPLACE_WITH_YOUR_DATABASE: "analytics_db",
+    REPLACE_WITH_YOUR_SCHEMA: "public",
+    REPLACE_WITH_YOUR_MCP_SERVER_NAME: "my_mcp_server",
+  };
+  const answers = placeholders.map((p) => ({
+    path: p.path,
+    token: p.token,
+    value: answerValues[p.token] ?? p.token,
+  }));
+
+  const result = applyPlaceholderValues(snowflake.config, answers);
+  assert.equal(
+    result.url,
+    "https://acme-prod.snowflakecomputing.com/api/v2/databases/analytics_db/schemas/public/mcp-servers/my_mcp_server"
+  );
+  assert.doesNotMatch(result.url, /REPLACE_/);
+  const bearerPlaceholder = placeholders.find((p) => p.path.join(".") === "headers.Authorization");
+  const bearerAnswer = { path: bearerPlaceholder.path, token: bearerPlaceholder.token, value: "secret-pat-token" };
+  const withBearer = applyPlaceholderValues(result, [bearerAnswer]);
+  assert.equal(withBearer.headers.Authorization, "Bearer secret-pat-token");
+});
+
+test("applyPlaceholderValues replaces a prefix token and preserves the literal suffix in the sqlserver template", async () => {
+  const templates = await loadTemplates();
+  const sqlserver = templates.find((t) => t.id === "sqlserver");
+  const placeholders = collectPlaceholders(sqlserver.config);
+  const pathArgPlaceholder = placeholders.find((p) => p.token === "REPLACE_WITH_ABSOLUTE_PATH");
+  assert.ok(pathArgPlaceholder);
+  assert.equal(pathArgPlaceholder.value, "REPLACE_WITH_ABSOLUTE_PATH/dab-config.json");
+
+  const result = applyPlaceholderValues(sqlserver.config, [
+    { path: pathArgPlaceholder.path, token: pathArgPlaceholder.token, value: "/home/user/project" },
+  ]);
+  const updatedArg = getAtPathForTest(result, pathArgPlaceholder.path);
+  assert.equal(updatedArg, "/home/user/project/dab-config.json");
+});
+
+function getAtPathForTest(target, pathSegments) {
+  let cursor = target;
+  for (const segment of pathSegments) {
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+
+test("describePlaceholder produces a human readable prompt from a REPLACE_WITH_ style token", () => {
   const message = describePlaceholder(["args", 2], "REPLACE_WITH_YOUR_ORG_URL");
   assert.match(message, /your org url/);
   assert.match(message, /args\.2/);

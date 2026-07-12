@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { atomicWriteFile, backupIfMissing, readFileIfExists } from "../lib/atomic-fs.js";
+import {
+  atomicWriteFile,
+  backupIfMissing,
+  readFileIfExists,
+  assertNoSymlinkedAncestors,
+  SymlinkRefusedError,
+} from "../lib/atomic-fs.js";
 
 async function makeTempDir() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "bi-agent-kit-test-"));
@@ -90,4 +96,37 @@ test("backupIfMissing is a no-op when the target file does not exist yet", async
   assert.equal(didBackup, false);
   const backupDirEntries = await readFileIfExists(path.join(dir, ".bi-agent-kit-backups", "missing.json"));
   assert.equal(backupDirEntries, null);
+});
+
+test("assertNoSymlinkedAncestors does not throw for a normal, non-symlinked path", async () => {
+  const dir = await makeTempDir();
+  const target = path.join(dir, "nested", "config.json");
+  await atomicWriteFile(target, "content");
+  await assert.doesNotReject(() => assertNoSymlinkedAncestors(target, dir));
+});
+
+test("assertNoSymlinkedAncestors does not throw when components do not exist yet", async () => {
+  const dir = await makeTempDir();
+  const target = path.join(dir, "not-yet-created", "config.json");
+  await assert.doesNotReject(() => assertNoSymlinkedAncestors(target, dir));
+});
+
+test("assertNoSymlinkedAncestors refuses a path whose parent directory is a symlink", async (t) => {
+  const dir = await makeTempDir();
+  const realDir = path.join(dir, "real-outside-target");
+  await fs.mkdir(realDir, { recursive: true });
+  await fs.writeFile(path.join(realDir, "secret.json"), "outside content", "utf8");
+
+  const linkedDir = path.join(dir, "project", "linked");
+  await fs.mkdir(path.join(dir, "project"), { recursive: true });
+
+  try {
+    await fs.symlink(realDir, linkedDir, "dir");
+  } catch {
+    t.skip("symlink creation not permitted in this environment");
+    return;
+  }
+
+  const target = path.join(linkedDir, "secret.json");
+  await assert.rejects(() => assertNoSymlinkedAncestors(target, path.join(dir, "project")), SymlinkRefusedError);
 });
