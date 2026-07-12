@@ -201,6 +201,24 @@ test("findExternallyManagedEntries does not flag a key bi-agent-kit already owns
   assert.equal(result.some((r) => r.absPath === absPath && r.serverId === "powerbi"), false);
 });
 
+test("findExternallyManagedEntries detects a hand-added named-instance key", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(
+    absPath,
+    "{\n  \"mcpServers\": {\n    \"dataverse-dev\": { \"command\": \"hand configured\" }\n  }\n}\n",
+    "utf8"
+  );
+  const templates = await loadTemplates();
+  const groups = await getDetectedTargetGroups({ dir, homedir: dir, platform: "linux" });
+  const result = await findExternallyManagedEntries({ dir, groups, templates });
+  assert.ok(
+    result.some(
+      (r) => r.absPath === absPath && r.serverId === "dataverse-dev" && r.templateId === "dataverse"
+    )
+  );
+});
+
 test("applySelections never overwrites an externally managed entry even if selected", async () => {
   const dir = await makeTempDir();
   const absPath = path.join(dir, ".mcp.json");
