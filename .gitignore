@@ -3,5 +3,6 @@ node_modules/
 CLAUDE.md
 docs/superpowers/
 ruvector.db
-.fablize
+.fablize/
 .claude-flow/
+.remember/
