@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseArgs, VALID_COMMANDS } from "../bin/cli.js";
+import { parseServerSpec } from "../lib/commands.js";
 
 test("parseArgs defaults to the init command with dry run false", () => {
   const result = parseArgs(["node", "cli.js"]);
@@ -23,9 +24,20 @@ test("parseArgs recognizes the doctor command", () => {
   assert.equal(result.command, "doctor");
 });
 
+test("parseArgs recognizes the reconfigure command", () => {
+  const result = parseArgs(["node", "cli.js", "reconfigure"]);
+  assert.equal(result.command, "reconfigure");
+});
+
 test("parseArgs detects the dry run flag alongside a command", () => {
   const result = parseArgs(["node", "cli.js", "init", "--dry-run"]);
   assert.equal(result.command, "init");
+  assert.equal(result.dryRun, true);
+});
+
+test("parseArgs detects the dry run flag alongside the reconfigure command", () => {
+  const result = parseArgs(["node", "cli.js", "reconfigure", "--dry-run"]);
+  assert.equal(result.command, "reconfigure");
   assert.equal(result.dryRun, true);
 });
 
@@ -36,7 +48,7 @@ test("parseArgs does not silently fall back to init for an unknown command", () 
 });
 
 test("VALID_COMMANDS lists exactly the supported commands", () => {
-  assert.deepEqual(VALID_COMMANDS, ["init", "configure", "list", "doctor"]);
+  assert.deepEqual(VALID_COMMANDS, ["init", "configure", "list", "doctor", "reconfigure"]);
 });
 
 test("parseArgs detects --help and -h", () => {
@@ -71,6 +83,19 @@ test("parseArgs parses --servers into an array", () => {
 test("parseArgs parses --servers= form into an array", () => {
   const result = parseArgs(["node", "cli.js", "init", "--servers=powerbi, dataverse "]);
   assert.deepEqual(result.servers, ["powerbi", "dataverse"]);
+});
+
+test("parseArgs parses --servers with templateId:instanceName specs as raw strings", () => {
+  // parseArgs itself stays a pure string splitter -- it does not know about
+  // the templateId:instanceName spec syntax. Spec parsing happens downstream
+  // via parseServerSpec, in the command flow, on each raw string it returns.
+  const result = parseArgs(["node", "cli.js", "init", "--servers", "dataverse:dev,powerbi"]);
+  assert.deepEqual(result.servers, ["dataverse:dev", "powerbi"]);
+});
+
+test("parseArgs parses --servers= with templateId:instanceName specs as raw strings", () => {
+  const result = parseArgs(["node", "cli.js", "init", "--servers=dataverse:dev, powerbi"]);
+  assert.deepEqual(result.servers, ["dataverse:dev", "powerbi"]);
 });
 
 test("parseArgs parses --targets into an array", () => {
@@ -110,4 +135,37 @@ test("parseArgs is a pure function: it never prints or exits", () => {
   parseArgs(["node", "cli.js", "--help"]);
   parseArgs(["node", "cli.js", "not-a-real-command"]);
   assert.ok(true);
+});
+
+// --- server-spec parsing, through the seam parseArgs hands off to -----------
+//
+// parseArgs stays pure and returns the raw --servers strings as given; actual
+// templateId:instanceName parsing happens per-string via parseServerSpec
+// (lib/commands.js) in the install-flow command handler. These tests drive
+// that seam directly: parseArgs's raw output piped through parseServerSpec.
+
+test("parseServerSpec resolves a plain template id with no instance", () => {
+  const raw = parseArgs(["node", "cli.js", "init", "--servers", "powerbi"]).servers[0];
+  const spec = parseServerSpec(raw);
+  assert.deepEqual(spec, { templateId: "powerbi", instanceName: null, serverId: "powerbi" });
+});
+
+test("parseServerSpec resolves a templateId:instanceName spec to a suffixed serverId", () => {
+  const raw = parseArgs(["node", "cli.js", "init", "--servers", "dataverse:dev"]).servers[0];
+  const spec = parseServerSpec(raw);
+  assert.deepEqual(spec, { templateId: "dataverse", instanceName: "dev", serverId: "dataverse-dev" });
+});
+
+test("parseServerSpec rejects instance names with invalid characters", () => {
+  const raw = parseArgs(["node", "cli.js", "init", "--servers", "dataverse:not valid!"]).servers[0];
+  assert.throws(() => parseServerSpec(raw), /instance name/i);
+});
+
+test("parseServerSpec accepts every --servers entry from a mixed spec list", () => {
+  const raw = parseArgs(["node", "cli.js", "init", "--servers", "dataverse:dev,powerbi"]).servers;
+  const specs = raw.map(parseServerSpec);
+  assert.deepEqual(specs, [
+    { templateId: "dataverse", instanceName: "dev", serverId: "dataverse-dev" },
+    { templateId: "powerbi", instanceName: null, serverId: "powerbi" },
+  ]);
 });

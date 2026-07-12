@@ -111,3 +111,32 @@ test("readManifest throws ManifestCorruptError on invalid json", async () => {
   await fs.writeFile(path.join(dir, MANIFEST_FILENAME), "not json", "utf8");
   await assert.rejects(() => readManifest(dir), ManifestCorruptError);
 });
+
+test("writeManifestEntry stores a templateId field alongside serverKey", async () => {
+  const dir = await makeTempDir();
+  await writeManifestEntry(dir, {
+    absPath: "/proj/.mcp.json",
+    serverKey: "dataverse-dev",
+    templateId: "dataverse",
+    targetIds: ["claude-code"],
+    contentHash: "abc123",
+    installedAt: 1000,
+  });
+  const manifest = await readManifest(dir);
+  assert.equal(manifest.entries[0].templateId, "dataverse");
+  assert.equal(manifest.entries[0].serverKey, "dataverse-dev");
+});
+
+test("readManifest returns entries without a templateId field unchanged, for callers to apply their own fallback", async () => {
+  const dir = await makeTempDir();
+  await writeManifestEntry(dir, {
+    absPath: "/proj/.mcp.json",
+    serverKey: "powerbi",
+    targetIds: ["claude-code"],
+    contentHash: "abc123",
+    installedAt: 1000,
+  });
+  const manifest = await readManifest(dir);
+  assert.equal(manifest.entries[0].templateId, undefined);
+  assert.equal(manifest.entries[0].serverKey, "powerbi");
+});

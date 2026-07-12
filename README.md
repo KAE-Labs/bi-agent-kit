@@ -42,12 +42,18 @@ npx bi-agent-kit doctor
 
 Health-checks everything previously installed: the manifest, each config file, whether entries were hand-edited or removed outside `bi-agent-kit`, whether required CLIs are still on PATH, and whether any setup placeholder was never filled in. Exits nonzero if anything is broken.
 
+```
+npx bi-agent-kit reconfigure
+```
+
+Picks an already-installed entry from a list and re-runs its setup walkthrough in place -- useful when an org URL, connection string, or token changes, or when you left a placeholder unfilled the first time. It re-applies the entry's own value into the same config file and target under the same key, so the diff on that file is just the values that changed.
+
 ### Flags
 
 | Flag | What it does |
 |---|---|
-| `--dry-run` | Preview exactly what `init`/`configure` would write or remove; nothing is touched and no setup questions are asked |
-| `--servers <ids>` | Non-interactive: comma-separated server ids to install (e.g. `--servers powerbi,fabric`), skipping the picker |
+| `--dry-run` | Preview exactly what `init`/`configure`/`reconfigure` would write or remove; nothing is touched and no setup questions are asked |
+| `--servers <ids>` | Non-interactive: comma-separated server specs to install (e.g. `--servers powerbi,fabric`), skipping the picker |
 | `--targets <ids>` | With `--servers`, restrict installation to specific target ids |
 | `--yes` | Skip confirmation prompts (never auto-runs installers) |
 | `--json` | Machine-readable output for `list` and `doctor` |
@@ -55,6 +61,20 @@ Health-checks everything previously installed: the manifest, each config file, w
 | `--version`, `-v` | Print the version |
 
 Non-interactive mode never prompts for setup values: placeholder tokens are left in place with a warning so you can fill them in afterward, which makes it safe for scripts, devcontainer hooks, and CI.
+
+### Instances -- multiple environments or accounts of the same server
+
+A server spec is either a plain template id (`dataverse`) or `templateId:instanceName` (`dataverse:dev`), where `instanceName` is letters, numbers, and hyphens. Each named instance gets its own key in the config file (`dataverse-dev`, `dataverse-prod`, ...) and its own entry in the manifest, so it can be configured, reconfigured, and removed independently of any other instance of the same server.
+
+```
+npx bi-agent-kit init --servers dataverse:dev,dataverse:prod
+```
+
+installs two Dataverse MCP entries side by side -- `dataverse-dev` and `dataverse-prod` -- each walking you through its own org URL.
+
+This is for the case where one template genuinely needs more than one live configuration at once: a dev and a prod Dataverse environment, two Fabric workspaces, two SQL Server or Snowflake accounts, a personal and a client Postgres database. In the interactive picker, choosing a server that is already installed at a target offers **Keep as is**, **Reconfigure values**, or **Add as a new named instance** -- the last option prompts for an instance name and installs alongside the existing entry rather than replacing it.
+
+`list` and `doctor` render instance keys as-is (`dataverse-dev`, not `dataverse`), so each instance's health and installed-date show independently.
 
 ### End-to-end example
 

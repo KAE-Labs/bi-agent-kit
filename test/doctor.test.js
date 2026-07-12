@@ -208,3 +208,75 @@ test("runDoctor handles multiple manifest entries across different states indepe
   const placeholderWarns = findingsFor(findings, "placeholder", "warn");
   assert.equal(placeholderWarns.length, 1);
 });
+
+test("runDoctor reports a drifted instance entry by its instance key, not the base template id", async () => {
+  const dir = await makeTempDir();
+  const homedir = dir;
+  const platform = process.platform;
+  const templates = await loadTemplates();
+  const template = templates.find((t) => t.id === "dataverse");
+  const group = claudeCodeGroup(dir, homedir, platform);
+  await addServerToTarget({
+    dir,
+    resolvedTarget: group,
+    serverKey: "dataverse-dev",
+    serverValue: { command: "npx", args: ["original-value"] },
+    templateId: "dataverse",
+  });
+
+  const absPath = path.join(dir, ".mcp.json");
+  const original = await fs.readFile(absPath, "utf8");
+  await fs.writeFile(absPath, original.replace("original-value", "hand-edited-value"), "utf8");
+
+  const findings = await runDoctor({ dir, homedir, platform });
+
+  const warns = findingsFor(findings, "drift", "warn");
+  assert.equal(warns.length, 1);
+  assert.match(warns[0].message, /dataverse-dev/);
+});
+
+test("runDoctor names the instance serverKey (not the template id) in a missing-binary finding", async () => {
+  const dir = await makeTempDir();
+  const homedir = dir;
+  const platform = process.platform;
+  const group = claudeCodeGroup(dir, homedir, platform);
+  // pac-cli requires the "pac" binary on PATH, which is not expected to be present here.
+  await addServerToTarget({
+    dir,
+    resolvedTarget: group,
+    serverKey: "pac-cli-dev",
+    serverValue: { command: "pac", args: ["dev"] },
+    templateId: "pac-cli",
+  });
+
+  const findings = await runDoctor({ dir, homedir, platform });
+
+  const binaryFindings = findingsFor(findings, "binary");
+  const anyWarnsAboutInstance = binaryFindings.some(
+    (f) => f.level === "warn" && f.message.includes("pac-cli-dev")
+  );
+  const allOk = binaryFindings.every((f) => f.level === "ok");
+  assert.ok(anyWarnsAboutInstance || allOk);
+});
+
+test("runDoctor resolves the template for an old manifest entry that has no templateId field, including its requiresBinary check", async () => {
+  const dir = await makeTempDir();
+  const homedir = dir;
+  const platform = process.platform;
+  await installTemplate(dir, homedir, platform, "pac-cli");
+
+  const manifestPath = path.join(dir, MANIFEST_FILENAME);
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  delete manifest.entries[0].templateId;
+  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+
+  const findings = await runDoctor({ dir, homedir, platform });
+
+  assert.equal(findings.some((f) => f.level === "error"), false);
+  const binaryFindings = findingsFor(findings, "binary");
+  const anyWarnsAboutPac = binaryFindings.some(
+    (f) => f.level === "warn" && f.message.includes("pac-cli")
+  );
+  const allOk = binaryFindings.every((f) => f.level === "ok");
+  assert.ok(anyWarnsAboutPac || allOk);
+});

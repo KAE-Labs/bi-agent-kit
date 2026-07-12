@@ -17,6 +17,9 @@ import {
   describePlaceholder,
   applySelections,
   listInstalled,
+  parseServerSpec,
+  getInstalledEntries,
+  reconfigureEntry,
 } from "../lib/commands.js";
 import { isBinaryOnPath } from "../lib/prereq-check.js";
 import { offerInstall } from "../lib/installers.js";
@@ -26,7 +29,7 @@ const execFileAsync = promisify(execFile);
 
 const SECRET_TOKEN_MARKERS = ["TOKEN", "SECRET", "PASSWORD", "CONNECTION_STRING", "PAT", "KEY", "URI"];
 
-export const VALID_COMMANDS = ["init", "configure", "list", "doctor"];
+export const VALID_COMMANDS = ["init", "configure", "list", "doctor", "reconfigure"];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -101,12 +104,14 @@ function printHelp() {
     "  configure                Same as init, re-run any time to change your selections",
     "  list                     Show what bi-agent-kit has installed, grouped by target config file",
     "  doctor                   Check the environment for common setup problems",
+    "  reconfigure               Re-run the placeholder walkthrough for an already-installed entry",
     "",
     "Flags:",
     "  --dry-run                Show what would change without writing anything",
     "  --yes                    Skip confirmations; never runs installers without an explicit interactive yes",
     "  --json                   Machine-readable output (list, doctor)",
-    "  --servers <ids>          Comma-separated server template ids, skips the interactive picker",
+    "  --servers <ids>          Comma-separated server specs, skips the interactive picker.",
+    "                            Each spec is templateId or templateId:instanceName (e.g. dataverse:dev)",
     "  --targets <ids>          Comma-separated target ids (see lib/targets.js), restricts --servers to these targets",
     "  --help, -h               Show this help and exit",
     "  --version, -v            Show the installed version and exit",
@@ -136,6 +141,11 @@ function labelForTargetIds(targetIds) {
       return def ? def.label : id;
     })
     .join(", ");
+}
+
+/** templateId for a selection, falling back to serverId for pre-existing manifests / callers. */
+function templateIdFor(selection) {
+  return selection.templateId || selection.serverId;
 }
 
 async function warnIfSecretNotGitignored({ dir, absPath }) {
@@ -214,6 +224,45 @@ function describeExternallyManagedGuidance() {
   return "The entry stays untouched; remove or rename it by hand first if you want bi-agent-kit to manage it.";
 }
 
+/**
+ * Runs the interactive placeholder walkthrough for a template, prompting for
+ * every REPLACE_ token found in its config. Kept as a small isolated seam so
+ * the add flow, the picker's inline reconfigure, and the reconfigure command
+ * all share one implementation.
+ *
+ * Returns { answers, hasSecret } where answers is ready to hand to
+ * applyPlaceholderValues and hasSecret flags whether any answered token
+ * looked like a credential (for the gitignore warning).
+ */
+async function promptForPlaceholders(template) {
+  const placeholders = collectPlaceholders(template.config);
+  const answers = [];
+  let hasSecret = false;
+  for (const placeholder of placeholders) {
+    const answer = await clack.text({
+      message: describePlaceholder(placeholder.path, placeholder.token),
+      placeholder: placeholder.token,
+    });
+    if (clack.isCancel(answer)) {
+      clack.cancel("Cancelled.");
+      process.exit(1);
+    }
+    if (answer.trim().length > 0) {
+      answers.push({ path: placeholder.path, token: placeholder.token, value: answer.trim() });
+      if (looksSecretLike(placeholder.token)) hasSecret = true;
+    } else {
+      clack.log.warn(
+        "Left " +
+          placeholder.token +
+          " unset -- that literal token stays in the written config, and " +
+          template.label +
+          " will not work until you edit it."
+      );
+    }
+  }
+  return { answers, hasSecret };
+}
+
 async function runList({ dir, json }) {
   const installed = await listInstalled({ dir });
 
@@ -266,19 +315,25 @@ async function runDoctor({ dir, homedir, platform, json }) {
 }
 
 /**
- * Cross product of requested server ids x detected groups, restricted to
+ * Cross product of requested server specs x detected groups, restricted to
  * groups whose targetIds intersect the requested target ids (if any).
- * Throws with a message listing the valid ids when given an unknown id.
+ * Each spec is "templateId" or "templateId:instanceName", parsed via
+ * parseServerSpec. Throws with a message listing the valid template ids when
+ * given an unknown templateId, or with parseServerSpec's own message when
+ * the instance name is invalid.
  */
 function buildNonInteractiveSelections({ servers, targets, groups, templates }) {
   const validServerIds = templates.map((t) => t.id);
-  for (const serverId of servers) {
-    if (!validServerIds.includes(serverId)) {
+
+  const specs = servers.map((raw) => {
+    const spec = parseServerSpec(raw);
+    if (!validServerIds.includes(spec.templateId)) {
       throw new Error(
-        "Unknown server id: " + serverId + ". Valid server ids: " + validServerIds.join(", ")
+        "Unknown server id: " + spec.templateId + ". Valid server ids: " + validServerIds.join(", ")
       );
     }
-  }
+    return spec;
+  });
 
   const validTargetIds = TARGET_DEFINITIONS.map((t) => t.id);
   if (targets) {
@@ -296,12 +351,88 @@ function buildNonInteractiveSelections({ servers, targets, groups, templates }) 
     : groups;
 
   const selections = [];
-  for (const serverId of servers) {
+  for (const spec of specs) {
     for (const group of matchingGroups) {
-      selections.push({ absPath: group.absPath, serverId });
+      selections.push({ absPath: group.absPath, serverId: spec.serverId, templateId: spec.templateId });
     }
   }
   return selections;
+}
+
+/**
+ * For each already-installed (serverId, absPath) pair among the chosen
+ * servers/targets, asks the user whether to keep it as is, reconfigure it in
+ * place, or add a new named instance alongside it. Returns the resulting
+ * selections list (skip/new-instance both contribute selections that survive
+ * the diff; reconfigure additionally runs its walkthrough immediately and is
+ * reported separately since it never appears in `toAdd`).
+ */
+async function resolveInteractiveSelections({ chosenServers, chosenTargets, previousSelections, templates, dryRun }) {
+  const previousKeys = new Set(previousSelections.map((s) => s.absPath + "::" + s.serverId));
+  const raw = [];
+  const reconfigured = [];
+
+  for (const templateId of chosenServers) {
+    for (const absPath of chosenTargets) {
+      const key = absPath + "::" + templateId;
+      if (!previousKeys.has(key)) {
+        raw.push({ absPath, serverId: templateId, templateId });
+        continue;
+      }
+
+      const choice = await clack.select({
+        message: templateId + " is already installed at " + absPath + ". What would you like to do?",
+        options: [
+          { value: "skip", label: "Keep as is" },
+          { value: "reconfigure", label: "Reconfigure values" },
+          { value: "new-instance", label: "Add as a new named instance" },
+        ],
+      });
+      if (clack.isCancel(choice)) {
+        clack.cancel("Cancelled.");
+        process.exit(1);
+      }
+
+      if (choice === "skip") {
+        raw.push({ absPath, serverId: templateId, templateId });
+        continue;
+      }
+
+      if (choice === "reconfigure") {
+        raw.push({ absPath, serverId: templateId, templateId });
+        const template = templates.find((t) => t.id === templateId);
+        if (dryRun) {
+          reconfigured.push({ absPath, serverId: templateId, status: "dry-run" });
+          continue;
+        }
+        clack.log.step("Reconfiguring " + template.label + " at " + absPath);
+        const { answers } = await promptForPlaceholders(template);
+        const configOverride = applyPlaceholderValues(template.config, answers);
+        reconfigured.push({ absPath, serverId: templateId, configOverride });
+        continue;
+      }
+
+      // new-instance: keep the existing entry, add a second one under a new name
+      raw.push({ absPath, serverId: templateId, templateId });
+      let instanceName;
+      let spec = null;
+      while (spec === null) {
+        instanceName = await clack.text({ message: "Instance name (letters, numbers, hyphens)" });
+        if (clack.isCancel(instanceName)) {
+          clack.cancel("Cancelled.");
+          process.exit(1);
+        }
+        try {
+          spec = parseServerSpec(templateId + ":" + instanceName);
+        } catch (err) {
+          clack.log.error(err.message);
+        }
+      }
+      raw.push({ absPath, serverId: spec.serverId, templateId: spec.templateId });
+    }
+  }
+
+  return { raw, reconfigured };
 }
 
 async function runInstallFlow(parsed) {
@@ -369,6 +500,7 @@ async function runInstallFlow(parsed) {
   }
 
   let newSelections;
+  let pickerReconfigured = [];
 
   if (nonInteractive) {
     let raw;
@@ -417,12 +549,14 @@ async function runInstallFlow(parsed) {
       process.exit(1);
     }
 
-    const raw = [];
-    for (const serverId of chosenServers) {
-      for (const absPath of chosenTargets) {
-        raw.push({ absPath, serverId });
-      }
-    }
+    const { raw, reconfigured } = await resolveInteractiveSelections({
+      chosenServers,
+      chosenTargets,
+      previousSelections,
+      templates,
+      dryRun,
+    });
+    pickerReconfigured = reconfigured;
     newSelections = raw.filter((s) => !externallyManagedKeys.has(s.absPath + "::" + s.serverId));
   }
 
@@ -438,7 +572,7 @@ async function runInstallFlow(parsed) {
       selections.push(selection);
       continue;
     }
-    const template = templates.find((t) => t.id === selection.serverId);
+    const template = templates.find((t) => t.id === templateIdFor(selection));
     const placeholders = template ? collectPlaceholders(template.config) : [];
     if (placeholders.length === 0) {
       selections.push(selection);
@@ -461,31 +595,8 @@ async function runInstallFlow(parsed) {
     }
 
     clack.log.step("Setup needed for " + template.label + " at " + selection.absPath);
-    const answers = [];
-    for (const placeholder of placeholders) {
-      const answer = await clack.text({
-        message: describePlaceholder(placeholder.path, placeholder.token),
-        placeholder: placeholder.token,
-      });
-      if (clack.isCancel(answer)) {
-        clack.cancel("Cancelled.");
-        process.exit(1);
-      }
-      if (answer.trim().length > 0) {
-        answers.push({ path: placeholder.path, token: placeholder.token, value: answer.trim() });
-        if (looksSecretLike(placeholder.token)) {
-          secretSelectionKeys.add(key);
-        }
-      } else {
-        clack.log.warn(
-          "Left " +
-            placeholder.token +
-            " unset -- that literal token stays in the written config, and " +
-            template.label +
-            " will not work until you edit it."
-        );
-      }
-    }
+    const { answers, hasSecret } = await promptForPlaceholders(template);
+    if (hasSecret) secretSelectionKeys.add(key);
     const configOverride = applyPlaceholderValues(template.config, answers);
     selections.push({ ...selection, configOverride });
     if (template && template.id === "pac-cli") pacCliJustConfigured = true;
@@ -503,6 +614,23 @@ async function runInstallFlow(parsed) {
     }
   }
 
+  for (const item of pickerReconfigured) {
+    if (item.status === "dry-run") {
+      clack.log.info("reconfigure " + item.serverId + " at " + item.absPath + ": dry-run");
+      continue;
+    }
+    const status = await reconfigureEntry({
+      dir,
+      homedir,
+      platform,
+      templates,
+      absPath: item.absPath,
+      serverId: item.serverId,
+      configOverride: item.configOverride,
+    });
+    clack.log.info("reconfigure " + item.serverId + " at " + item.absPath + ": " + status.status);
+  }
+
   if (!dryRun && !nonInteractive && !yes) {
     const pacAvailable = await isBinaryOnPath("pac");
     if (pacAvailable && pacCliJustConfigured) {
@@ -511,6 +639,71 @@ async function runInstallFlow(parsed) {
   }
 
   clack.outro(dryRun ? "Dry run complete, nothing was written." : "Done.");
+}
+
+async function runReconfigure(parsed) {
+  clack.intro("bi-agent-kit reconfigure");
+
+  const dir = process.cwd();
+  const homedir = os.homedir();
+  const platform = process.platform;
+
+  const templates = await loadTemplates();
+  const entries = await getInstalledEntries({ dir, templates });
+
+  if (entries.length === 0) {
+    clack.log.info("Nothing installed yet. Run npx bi-agent-kit init to get started.");
+    clack.outro("Done.");
+    return;
+  }
+
+  const chosen = await clack.select({
+    message: "Which entry would you like to reconfigure?",
+    options: entries.map((entry) => ({ value: entry, label: entry.label })),
+  });
+  if (clack.isCancel(chosen)) {
+    clack.cancel("Cancelled.");
+    process.exit(1);
+  }
+
+  const template = templates.find((t) => t.id === templateIdFor(chosen));
+  if (!template) {
+    clack.log.error("Could not find the template backing this entry (" + templateIdFor(chosen) + ").");
+    process.exit(1);
+  }
+
+  if (parsed.dryRun) {
+    clack.log.info(
+      "Would reconfigure " +
+        chosen.serverId +
+        " at " +
+        chosen.absPath +
+        (chosen.hasPlaceholders ? " (prompts skipped in dry run)" : " (no placeholders to fill in)")
+    );
+    clack.outro("Dry run complete, nothing was written.");
+    return;
+  }
+
+  if (!chosen.hasPlaceholders) {
+    clack.log.info(template.label + " has no configurable placeholders -- reapplying its default configuration.");
+  } else {
+    clack.log.step("Reconfiguring " + template.label + " at " + chosen.absPath);
+  }
+  const { answers } = await promptForPlaceholders(template);
+  const configOverride = applyPlaceholderValues(template.config, answers);
+
+  const status = await reconfigureEntry({
+    dir,
+    homedir,
+    platform,
+    templates,
+    absPath: chosen.absPath,
+    serverId: chosen.serverId,
+    configOverride,
+  });
+
+  clack.log.info("reconfigure " + chosen.serverId + " at " + chosen.absPath + ": " + status.status);
+  clack.outro("Done.");
 }
 
 async function main(parsed) {
@@ -536,6 +729,11 @@ async function main(parsed) {
 
   if (parsed.command === "doctor") {
     await runDoctor({ dir: process.cwd(), homedir: os.homedir(), platform: process.platform, json: parsed.json });
+    return;
+  }
+
+  if (parsed.command === "reconfigure") {
+    await runReconfigure(parsed);
     return;
   }
 

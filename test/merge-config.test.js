@@ -261,3 +261,73 @@ test("a run that fails partway through leaves the manifest matching exactly what
   assert.equal(manifest.entries.length, 1);
   assert.equal(manifest.entries[0].serverKey, "powerbi");
 });
+
+test("addServerToTarget records the given templateId in the manifest, distinct from serverKey", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  const target = jsonTarget(absPath, ["claude-code"]);
+  const result = await addServerToTarget({
+    dir,
+    resolvedTarget: target,
+    serverKey: "dataverse-dev",
+    serverValue: { command: "npx" },
+    templateId: "dataverse",
+  });
+  assert.equal(result.status, "written");
+  const manifest = await readManifest(dir);
+  assert.equal(manifest.entries[0].serverKey, "dataverse-dev");
+  assert.equal(manifest.entries[0].templateId, "dataverse");
+});
+
+test("addServerToTarget defaults templateId to serverKey when omitted", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  const target = jsonTarget(absPath, ["claude-code"]);
+  await addServerToTarget({
+    dir,
+    resolvedTarget: target,
+    serverKey: "powerbi",
+    serverValue: { command: "npx" },
+  });
+  const manifest = await readManifest(dir);
+  assert.equal(manifest.entries[0].templateId, "powerbi");
+});
+
+test("two instances of the same template installed into the same target file both persist independently, and removing one leaves the other intact", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  const target = jsonTarget(absPath, ["claude-code"]);
+  await addServerToTarget({
+    dir,
+    resolvedTarget: target,
+    serverKey: "dataverse-dev",
+    serverValue: { command: "npx", args: ["dev"] },
+    templateId: "dataverse",
+  });
+  await addServerToTarget({
+    dir,
+    resolvedTarget: target,
+    serverKey: "dataverse-prod",
+    serverValue: { command: "npx", args: ["prod"] },
+    templateId: "dataverse",
+  });
+
+  const fileText = await fs.readFile(absPath, "utf8");
+  assert.match(fileText, /dataverse-dev/);
+  assert.match(fileText, /dataverse-prod/);
+
+  const manifestBefore = await readManifest(dir);
+  assert.equal(manifestBefore.entries.length, 2);
+
+  const removeResult = await removeServerFromTarget({ dir, resolvedTarget: target, serverKey: "dataverse-dev" });
+  assert.equal(removeResult.status, "removed");
+
+  const fileTextAfter = await fs.readFile(absPath, "utf8");
+  assert.doesNotMatch(fileTextAfter, /dataverse-dev/);
+  assert.match(fileTextAfter, /dataverse-prod/);
+
+  const manifestAfter = await readManifest(dir);
+  assert.equal(manifestAfter.entries.length, 1);
+  assert.equal(manifestAfter.entries[0].serverKey, "dataverse-prod");
+  assert.equal(manifestAfter.entries[0].templateId, "dataverse");
+});
