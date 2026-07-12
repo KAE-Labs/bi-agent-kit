@@ -4,6 +4,11 @@
 
 # bi-agent-kit
 
+<div align="center">
+  <a href="https://www.npmjs.com/package/bi-agent-kit"><img src="https://img.shields.io/npm/v/bi-agent-kit" alt="npm version" /></a>
+  <a href="https://github.com/kae-labs/bi-agent-kit/actions/workflows/test.yml"><img src="https://github.com/kae-labs/bi-agent-kit/actions/workflows/test.yml/badge.svg" alt="test status" /></a>
+</div>
+
 **A configurable installer for AI-agent tooling aimed at Business Intelligence work.**
 
 <div align="center">
@@ -11,6 +16,8 @@
 </div>
 
 `bi-agent-kit` installs BI-related MCP server entries into the config files of the AI coding tools you already use -- Claude Code, Cursor, Gemini CLI, GitHub Copilot, and more -- without ever touching anything else already in those files.
+
+CI runs the full test suite on both Linux and Windows (Node 20.x and 22.x) on every push and pull request.
 
 Pick the servers you want, pick which tools to wire them into, and `bi-agent-kit` handles the rest: safe merges, atomic writes, an interactive walkthrough for anything that needs your own account details, and a manifest so entries can be cleanly added or removed later.
 
@@ -29,6 +36,24 @@ npx bi-agent-kit configure
 ```
 
 Re-opens the same picker with current selections pre-checked, adds anything newly selected, and removes anything deselected -- as long as that entry has not been hand-edited since install.
+
+```
+npx bi-agent-kit remove <spec...>
+```
+
+Removes one or more installed servers by spec (`templateId` or `templateId:instanceName`, e.g. `npx bi-agent-kit remove dataverse:dev powerbi`) from every target it was installed into, and updates the manifest. A spec that matches nothing installed is reported, not an error.
+
+```
+npx bi-agent-kit export --out team.json
+```
+
+Prints (or, with `--out`, writes) a portable JSON document describing your current server selections as `spec`/`targetIds` pairs -- no absolute paths, no placeholder values, no secrets -- so it is safe to commit or share with teammates.
+
+```
+npx bi-agent-kit init --from team.json
+```
+
+Reads a document produced by `export` and installs the same servers into the same target ids non-interactively, resolving target ids against whatever is detected on the current machine. Target ids not detected locally are skipped with a warning rather than failing the run, so a team-shared `team.json` works across machines with different tool setups.
 
 ```
 npx bi-agent-kit list
@@ -56,6 +81,8 @@ Picks an already-installed entry from a list and re-runs its setup walkthrough i
 | `--servers <ids>` | Non-interactive: comma-separated server specs to install (e.g. `--servers powerbi,fabric`), skipping the picker. Adds or updates the listed servers without touching any others already installed |
 | `--prune` | With `--servers`, remove anything not listed instead of only adding/updating (full-sync semantics) |
 | `--targets <ids>` | With `--servers`, restrict installation to specific target ids |
+| `--out <file>` | With `export`, write the document to a file instead of stdout |
+| `--from <file>` | With `init`, import a portable `export` document and install non-interactively |
 | `--yes` | Skip confirmation prompts (never auto-runs installers) |
 | `--json` | Machine-readable output for `list` and `doctor` |
 | `--help`, `-h` | Usage for every command and flag |
@@ -136,6 +163,8 @@ The Claude Code VS Code extension shares the CLI's configuration files, so Claud
 | **Postgres MCP** | Postgres database inspection, query, and index-tuning (Postgres MCP Pro) | [crystaldba/postgres-mcp](https://github.com/crystaldba/postgres-mcp) |
 
 Eight of the nine are official, first-party servers from Microsoft or Snowflake, or maintained directly by the tool vendor (dbt Labs). Postgres MCP is the best-maintained community alternative, since no first-party Postgres MCP server exists. None are roadmap-only.
+
+A weekly scheduled workflow (`.github/workflows/freshness.yml`) checks that every template's referenced registry package (npm or PyPI) still exists, so a renamed or unpublished upstream package is caught before it breaks an install.
 
 ## Safety
 

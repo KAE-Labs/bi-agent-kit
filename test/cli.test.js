@@ -48,7 +48,17 @@ test("parseArgs does not silently fall back to init for an unknown command", () 
 });
 
 test("VALID_COMMANDS lists exactly the supported commands", () => {
-  assert.deepEqual(VALID_COMMANDS, ["init", "configure", "list", "doctor", "reconfigure"]);
+  assert.deepEqual(VALID_COMMANDS, ["init", "configure", "list", "doctor", "reconfigure", "remove", "export"]);
+});
+
+test("parseArgs recognizes the remove command", () => {
+  const result = parseArgs(["node", "cli.js", "remove"]);
+  assert.equal(result.command, "remove");
+});
+
+test("parseArgs recognizes the export command", () => {
+  const result = parseArgs(["node", "cli.js", "export"]);
+  assert.equal(result.command, "export");
 });
 
 test("parseArgs detects --help and -h", () => {
@@ -271,4 +281,65 @@ test("findPreviousEntriesForPair does not confuse a bare template id match with 
     templates: fakeTemplates,
   });
   assert.deepEqual(result, []);
+});
+
+
+// --- remove command: rest/specs -------------------------------------------
+
+test("parseArgs captures positional specs after the command into rest", () => {
+  const result = parseArgs(["node", "cli.js", "remove", "dataverse:dev", "powerbi"]);
+  assert.equal(result.command, "remove");
+  assert.deepEqual(result.rest, ["dataverse:dev", "powerbi"]);
+});
+
+test("parseArgs rest is empty for a command with no positional specs", () => {
+  const result = parseArgs(["node", "cli.js", "remove"]);
+  assert.deepEqual(result.rest, []);
+});
+
+test("parseArgs rest ignores flags interleaved with positional specs", () => {
+  const result = parseArgs(["node", "cli.js", "remove", "powerbi", "--dry-run", "dataverse:dev"]);
+  assert.deepEqual(result.rest, ["powerbi", "dataverse:dev"]);
+  assert.equal(result.dryRun, true);
+});
+
+test("parseArgs rest stays empty for the default init command with no positional args", () => {
+  const result = parseArgs(["node", "cli.js"]);
+  assert.deepEqual(result.rest, []);
+});
+
+// --- export command: --out --------------------------------------------------
+
+test("parseArgs parses --out into a file path", () => {
+  const result = parseArgs(["node", "cli.js", "export", "--out", "config.json"]);
+  assert.equal(result.command, "export");
+  assert.equal(result.out, "config.json");
+});
+
+test("parseArgs parses --out= form into a file path", () => {
+  const result = parseArgs(["node", "cli.js", "export", "--out=config.json"]);
+  assert.equal(result.out, "config.json");
+});
+
+test("parseArgs leaves --out null when not provided", () => {
+  const result = parseArgs(["node", "cli.js", "export"]);
+  assert.equal(result.out, null);
+});
+
+// --- init command: --from ----------------------------------------------------
+
+test("parseArgs parses --from into a file path", () => {
+  const result = parseArgs(["node", "cli.js", "init", "--from", "team-config.json"]);
+  assert.equal(result.command, "init");
+  assert.equal(result.from, "team-config.json");
+});
+
+test("parseArgs parses --from= form into a file path", () => {
+  const result = parseArgs(["node", "cli.js", "init", "--from=team-config.json"]);
+  assert.equal(result.from, "team-config.json");
+});
+
+test("parseArgs leaves --from null when not provided", () => {
+  const result = parseArgs(["node", "cli.js", "init"]);
+  assert.equal(result.from, null);
 });

@@ -21,16 +21,19 @@ import {
   parseServerSpec,
   getInstalledEntries,
   reconfigureEntry,
+  exportConfig,
+  buildSelectionsFromConfig,
 } from "../lib/commands.js";
 import { isBinaryOnPath } from "../lib/prereq-check.js";
 import { offerInstall } from "../lib/installers.js";
-import { TARGET_DEFINITIONS } from "../lib/targets.js";
+import { TARGET_DEFINITIONS, resolveTargets } from "../lib/targets.js";
+import { removeServerFromTarget } from "../lib/merge-config.js";
 
 const execFileAsync = promisify(execFile);
 
 const SECRET_TOKEN_MARKERS = ["TOKEN", "SECRET", "PASSWORD", "CONNECTION_STRING", "PAT", "KEY", "URI"];
 
-export const VALID_COMMANDS = ["init", "configure", "list", "doctor", "reconfigure"];
+export const VALID_COMMANDS = ["init", "configure", "list", "doctor", "reconfigure", "remove", "export"];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -59,6 +62,9 @@ export function parseArgs(argv) {
     servers: null,
     targets: null,
     prune: false,
+    out: null,
+    from: null,
+    rest: [],
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -87,6 +93,18 @@ export function parseArgs(argv) {
       if (value !== undefined) i++;
     } else if (arg.startsWith("--targets=")) {
       result.targets = splitList(arg.slice("--targets=".length));
+    } else if (arg === "--out") {
+      const value = args[i + 1];
+      result.out = value !== undefined ? value : null;
+      if (value !== undefined) i++;
+    } else if (arg.startsWith("--out=")) {
+      result.out = arg.slice("--out=".length);
+    } else if (arg === "--from") {
+      const value = args[i + 1];
+      result.from = value !== undefined ? value : null;
+      if (value !== undefined) i++;
+    } else if (arg.startsWith("--from=")) {
+      result.from = arg.slice("--from=".length);
     } else if (!arg.startsWith("-")) {
       positional.push(arg);
     }
@@ -94,6 +112,7 @@ export function parseArgs(argv) {
   }
 
   result.command = positional[0] || "init";
+  result.rest = positional.slice(1);
   return result;
 }
 
@@ -109,6 +128,8 @@ function printHelp() {
     "  list                     Show what bi-agent-kit has installed, grouped by target config file",
     "  doctor                   Check the environment for common setup problems",
     "  reconfigure               Re-run the placeholder walkthrough for an already-installed entry",
+    "  remove <spec...>          Remove one or more installed servers (templateId or templateId:instanceName)",
+    "  export                    Print a portable JSON export of your installed server selections",
     "",
     "Flags:",
     "  --dry-run                Show what would change without writing anything",
@@ -119,6 +140,8 @@ function printHelp() {
     "                            Adds or updates the listed servers without touching any others already installed.",
     "  --prune                  With --servers, remove anything not listed instead of only adding/updating (full-sync semantics)",
     "  --targets <ids>          Comma-separated target ids (see lib/targets.js), restricts --servers to these targets",
+    "  --out <file>              With export, write the document to a file instead of stdout",
+    "  --from <file>             With init, import a portable export document and install non-interactively",
     "  --help, -h               Show this help and exit",
     "  --version, -v            Show the installed version and exit",
   ];
@@ -493,7 +516,7 @@ async function runInstallFlow(parsed) {
   const homedir = os.homedir();
   const platform = process.platform;
   const { dryRun, yes } = parsed;
-  const nonInteractive = parsed.servers !== null;
+  const nonInteractive = parsed.servers !== null || parsed.from !== null;
 
   const groups = await getDetectedTargetGroups({ dir, homedir, platform });
   if (groups.length === 0) {
@@ -555,12 +578,24 @@ async function runInstallFlow(parsed) {
   if (nonInteractive) {
     let raw;
     try {
-      raw = buildNonInteractiveSelections({
-        servers: parsed.servers,
-        targets: parsed.targets,
-        groups,
-        templates,
-      });
+      if (parsed.from) {
+        const fromText = await fs.readFile(path.resolve(parsed.from), "utf8");
+        const doc = JSON.parse(fromText);
+        const { selections: fromSelections, skipped } = buildSelectionsFromConfig({ doc, groups });
+        for (const item of skipped) {
+          clack.log.warn(
+            "Skipping " + item.spec + " for target \"" + item.targetId + "\": not detected on this machine."
+          );
+        }
+        raw = fromSelections;
+      } else {
+        raw = buildNonInteractiveSelections({
+          servers: parsed.servers,
+          targets: parsed.targets,
+          groups,
+          templates,
+        });
+      }
     } catch (err) {
       clack.log.error(err.message);
       process.exit(1);
@@ -757,6 +792,77 @@ async function runReconfigure(parsed) {
   clack.outro("Done.");
 }
 
+async function runRemove(parsed) {
+  clack.intro("bi-agent-kit remove");
+
+  const dir = process.cwd();
+  const homedir = os.homedir();
+  const platform = process.platform;
+  const specs = parsed.rest || [];
+
+  if (specs.length === 0) {
+    clack.log.warn("No server specs given. Usage: bi-agent-kit remove <spec...>");
+    clack.outro("Nothing to do.");
+    return;
+  }
+
+  const previousSelections = await getCurrentSelections({ dir });
+  const allGroups = resolveTargets(dir, homedir, platform);
+  const targetFilter = parsed.targets;
+
+  for (const raw of specs) {
+    let spec;
+    try {
+      spec = parseServerSpec(raw);
+    } catch (err) {
+      clack.log.error(err.message);
+      continue;
+    }
+
+    const matches = previousSelections.filter((entry) => {
+      if (entry.serverId !== spec.serverId) return false;
+      if (!targetFilter) return true;
+      const group = allGroups.find((g) => g.absPath === entry.absPath);
+      return group ? group.targetIds.some((id) => targetFilter.includes(id)) : false;
+    });
+
+    if (matches.length === 0) {
+      clack.log.info(spec.serverId + ": not-installed");
+      continue;
+    }
+
+    for (const entry of matches) {
+      if (parsed.dryRun) {
+        clack.log.info("Would remove " + entry.serverId + " at " + entry.absPath);
+        continue;
+      }
+      const group = allGroups.find((g) => g.absPath === entry.absPath);
+      if (!group) {
+        clack.log.warn(entry.serverId + " at " + entry.absPath + ": target not resolvable on this machine, skipping");
+        continue;
+      }
+      const result = await removeServerFromTarget({ dir, resolvedTarget: group, serverKey: entry.serverId });
+      clack.log.info(entry.serverId + " at " + entry.absPath + ": " + result.status);
+    }
+  }
+
+  clack.outro(parsed.dryRun ? "Dry run complete, nothing was removed." : "Done.");
+}
+
+async function runExport(parsed) {
+  const dir = process.cwd();
+  const templates = await loadTemplates();
+  const doc = await exportConfig({ dir, templates });
+  const text = JSON.stringify(doc, null, 2) + "\n";
+
+  if (parsed.out) {
+    await fs.writeFile(path.resolve(parsed.out), text, "utf8");
+    clack.log.success("Wrote " + parsed.out);
+  } else {
+    console.log(text);
+  }
+}
+
 async function main(parsed) {
   if (parsed.help) {
     printHelp();
@@ -785,6 +891,16 @@ async function main(parsed) {
 
   if (parsed.command === "reconfigure") {
     await runReconfigure(parsed);
+    return;
+  }
+
+  if (parsed.command === "remove") {
+    await runRemove(parsed);
+    return;
+  }
+
+  if (parsed.command === "export") {
+    await runExport(parsed);
     return;
   }
 

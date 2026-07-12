@@ -18,7 +18,11 @@ import {
   reconfigureEntry,
   getCurrentSelections,
   mergeWithPrevious,
+  exportConfig,
+  buildSelectionsFromConfig,
 } from "../lib/commands.js";
+import { resolveTargets } from "../lib/targets.js";
+import { removeServerFromTarget } from "../lib/merge-config.js";
 
 async function makeTempDir() {
   return await fs.mkdtemp(path.join(os.tmpdir(), "bi-agent-kit-commands-test-"));
@@ -716,4 +720,164 @@ test("applySelections with mergeWithPrevious-additive selections keeps existing 
 
   const afterPrune = await listInstalled({ dir });
   assert.deepEqual(afterPrune.map((e) => e.serverId), ["powerbi"]);
+});
+
+
+// --- exportConfig ------------------------------------------------------------
+
+test("exportConfig round-trips installed instances into portable spec/targetIds entries with no absPaths or REPLACE_ values", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+
+  const devOverride = { command: "npx", args: ["-y", "@microsoft/dataverse", "mcp", "https://dev.crm.dynamics.com"], env: {} };
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [
+      { absPath, serverId: "dataverse-dev", templateId: "dataverse", configOverride: devOverride },
+      { absPath, serverId: "powerbi", templateId: "powerbi" },
+    ],
+    dryRun: false,
+  });
+
+  const doc = await exportConfig({ dir, templates });
+  assert.equal(doc.version, 1);
+  assert.equal(typeof doc.note, "string");
+  assert.ok(doc.note.length > 0);
+
+  const specs = doc.servers.map((s) => s.spec).sort();
+  assert.deepEqual(specs, ["dataverse:dev", "powerbi"]);
+
+  const dataverseEntry = doc.servers.find((s) => s.spec === "dataverse:dev");
+  assert.ok(dataverseEntry.targetIds.includes("claude-code"));
+
+  // Only the servers payload is asserted against REPLACE_/absPath leakage -- the
+  // top-level note field is expected to mention REPLACE_ generically as user guidance.
+  const serversText = JSON.stringify(doc.servers);
+  assert.doesNotMatch(serversText, /REPLACE_/);
+  assert.ok(!serversText.includes(absPath));
+  assert.doesNotMatch(serversText, /dev\.crm\.dynamics\.com/);
+});
+
+test("exportConfig omits entries whose templateId no longer resolves against the given templates", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "powerbi", templateId: "powerbi" }],
+    dryRun: false,
+  });
+  const doc = await exportConfig({ dir, templates: templates.filter((t) => t.id !== "powerbi") });
+  assert.deepEqual(doc.servers, []);
+});
+
+// --- buildSelectionsFromConfig ------------------------------------------------
+
+test("buildSelectionsFromConfig maps target ids to resolved groups", () => {
+  const groups = [
+    { absPath: "/a/.mcp.json", targetIds: ["claude-code", "copilot-cli-project"] },
+    { absPath: "/b/.cursor/mcp.json", targetIds: ["cursor-project"] },
+  ];
+  const doc = {
+    version: 1,
+    servers: [
+      { spec: "dataverse:dev", targetIds: ["claude-code"] },
+      { spec: "powerbi", targetIds: ["cursor-project"] },
+    ],
+  };
+  const { selections, skipped } = buildSelectionsFromConfig({ doc, groups });
+  assert.deepEqual(skipped, []);
+  assert.deepEqual(selections, [
+    { absPath: "/a/.mcp.json", serverId: "dataverse-dev", templateId: "dataverse" },
+    { absPath: "/b/.cursor/mcp.json", serverId: "powerbi", templateId: "powerbi" },
+  ]);
+});
+
+test("buildSelectionsFromConfig skips target ids not detected on this machine and reports them", () => {
+  const groups = [{ absPath: "/a/.mcp.json", targetIds: ["claude-code"] }];
+  const doc = {
+    version: 1,
+    servers: [{ spec: "powerbi", targetIds: ["claude-code", "windsurf-user"] }],
+  };
+  const { selections, skipped } = buildSelectionsFromConfig({ doc, groups });
+  assert.deepEqual(selections, [{ absPath: "/a/.mcp.json", serverId: "powerbi", templateId: "powerbi" }]);
+  assert.deepEqual(skipped, [{ spec: "powerbi", targetId: "windsurf-user" }]);
+});
+
+test("buildSelectionsFromConfig throws for an unsupported or missing version", () => {
+  const groups = [{ absPath: "/a/.mcp.json", targetIds: ["claude-code"] }];
+  assert.throws(() => buildSelectionsFromConfig({ doc: { version: 2, servers: [] }, groups }), /version/i);
+  assert.throws(() => buildSelectionsFromConfig({ doc: null, groups }), /version/i);
+});
+
+test("exportConfig -> buildSelectionsFromConfig round trip resolves back to installable selections on the same machine", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "dataverse-dev", templateId: "dataverse" }],
+    dryRun: false,
+  });
+  const doc = await exportConfig({ dir, templates });
+  const groups = await getDetectedTargetGroups({ dir, homedir: dir, platform: "linux" });
+  const { selections, skipped } = buildSelectionsFromConfig({ doc, groups });
+  assert.deepEqual(skipped, []);
+  assert.ok(selections.some((s) => s.serverId === "dataverse-dev" && s.templateId === "dataverse" && s.absPath === absPath));
+});
+
+// --- end-to-end remove (drives removeServerFromTarget the way the CLI remove command does) ---
+
+test("removing one installed instance by spec leaves the other instance installed", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [
+      { absPath, serverId: "dataverse-dev", templateId: "dataverse" },
+      { absPath, serverId: "dataverse-prod", templateId: "dataverse" },
+    ],
+    dryRun: false,
+  });
+  assert.equal((await listInstalled({ dir })).length, 2);
+
+  const spec = parseServerSpec("dataverse:dev");
+  const previousSelections = await getCurrentSelections({ dir });
+  const allGroups = resolveTargets(dir, dir, "linux");
+  const matches = previousSelections.filter((entry) => entry.serverId === spec.serverId);
+  assert.equal(matches.length, 1);
+
+  const group = allGroups.find((g) => g.absPath === matches[0].absPath);
+  const result = await removeServerFromTarget({ dir, resolvedTarget: group, serverKey: matches[0].serverId });
+  assert.equal(result.status, "removed");
+
+  const remaining = await listInstalled({ dir });
+  assert.deepEqual(remaining.map((e) => e.serverId), ["dataverse-prod"]);
+});
+
+test("removing a spec that matches nothing installed reports not-installed without error", async () => {
+  const dir = await makeTempDir();
+  const previousSelections = await getCurrentSelections({ dir });
+  const spec = parseServerSpec("powerbi");
+  const matches = previousSelections.filter((entry) => entry.serverId === spec.serverId);
+  assert.deepEqual(matches, []);
 });

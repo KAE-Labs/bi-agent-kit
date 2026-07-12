@@ -1,0 +1,21 @@
+name: Template Freshness
+
+on:
+  schedule:
+    # Weekly, Monday 09:17 UTC (quiet time, off the top of the hour to
+    # avoid the scheduling stampede).
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - run: node scripts/check-template-freshness.mjs
