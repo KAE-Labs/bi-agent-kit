@@ -17,6 +17,33 @@
   "scripts": {
     "test": "node --test"
   },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "business-intelligence",
+    "power-bi",
+    "dataverse",
+    "fabric",
+    "dbt",
+    "snowflake",
+    "postgres",
+    "azure",
+    "ai-agents",
+    "claude-code",
+    "cursor",
+    "copilot",
+    "installer",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kae-labs/bi-agent-kit.git"
+  },
+  "homepage": "https://github.com/kae-labs/bi-agent-kit#readme",
+  "bugs": {
+    "url": "https://github.com/kae-labs/bi-agent-kit/issues"
+  },
+  "author": "KAE Labs LLC (https://kaelabs.dev)",
   "license": "MIT",
   "publishConfig": {
     "provenance": true,

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 470" font-family="'Cascadia Code','SF Mono',Consolas,Menlo,monospace" font-size="13">
+  <rect width="760" height="470" rx="12" fill="#111418"/>
+  <rect width="760" height="36" rx="12" fill="#1B1F26"/>
+  <rect y="24" width="760" height="12" fill="#1B1F26"/>
+  <circle cx="22" cy="18" r="6" fill="#FF5F57"/>
+  <circle cx="42" cy="18" r="6" fill="#FEBC2E"/>
+  <circle cx="62" cy="18" r="6" fill="#28C840"/>
+  <text x="380" y="23" fill="#8A8F98" text-anchor="middle" font-size="12">bi-agent-kit</text>
+  <text x="28" y="74" fill="#F5F4EF" font-weight="600" opacity="0">$ npx bi-agent-kit init<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.0278;1" values="0;1;1"/></text>
+<text x="28" y="94" fill="#5B7CFF" font-weight="600" opacity="0">┌  bi-agent-kit<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.0833;1" values="0;1;1"/></text>
+<text x="28" y="114" fill="#8A8F98" opacity="0">│<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.1222;1" values="0;1;1"/></text>
+<text x="28" y="134" fill="#F5F4EF" opacity="0">◆  Select which BI servers to install<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.1222;1" values="0;1;1"/></text>
+<text x="28" y="154" fill="#8A8F98" opacity="0">│  ◻ Power BI MCP      semantic model authoring (TMSL/TOM)<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.1611;1" values="0;1;1"/></text>
+<text x="28" y="174" fill="#7BC96F" opacity="0">│  ◼ Power BI MCP      semantic model authoring (TMSL/TOM)<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.1889;1" values="0;1;1"/></text>
+<text x="28" y="194" fill="#7BC96F" opacity="0">│  ◼ Dataverse MCP     Dataverse hosted MCP endpoint<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.2278;1" values="0;1;1"/></text>
+<text x="28" y="214" fill="#8A8F98" opacity="0">│  ◻ Fabric MCP        Fabric REST APIs and workspace ops<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.2667;1" values="0;1;1"/></text>
+<text x="28" y="234" fill="#F5F4EF" opacity="0">◆  Select which detected config files to install into<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.3278;1" values="0;1;1"/></text>
+<text x="28" y="254" fill="#7BC96F" opacity="0">│  ◼ Claude Code (project)    .mcp.json<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.3667;1" values="0;1;1"/></text>
+<text x="28" y="274" fill="#8A8F98" opacity="0">│  ◻ Cursor (user)            ~/.cursor/mcp.json<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.4056;1" values="0;1;1"/></text>
+<text x="28" y="294" fill="#F5F4EF" opacity="0">◆  Enter a value for your org url (config.args.3)<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.4778;1" values="0;1;1"/></text>
+<text x="28" y="314" fill="#5B7CFF" opacity="0">│  https://yourorg.crm.dynamics.com<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.5333;1" values="0;1;1"/></text>
+<text x="28" y="334" fill="#7BC96F" opacity="0">│  add powerbi at .mcp.json: written<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.6111;1" values="0;1;1"/></text>
+<text x="28" y="354" fill="#7BC96F" opacity="0">│  add dataverse at .mcp.json: written<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.6500;1" values="0;1;1"/></text>
+<text x="28" y="374" fill="#F5F4EF" font-weight="600" opacity="0">└  Done.<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.7167;1" values="0;1;1"/></text>
+<text x="28" y="394" fill="#F5F4EF" font-weight="600" opacity="0">$ npx bi-agent-kit doctor<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.7889;1" values="0;1;1"/></text>
+<text x="28" y="414" fill="#7BC96F" opacity="0">│  ok    manifest readable, 2 entries checked<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.8444;1" values="0;1;1"/></text>
+<text x="28" y="434" fill="#7BC96F" opacity="0">│  ok    all required CLIs found on PATH<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.8778;1" values="0;1;1"/></text>
+<text x="28" y="454" fill="#F5F4EF" font-weight="600" opacity="0">└  Healthy.<animate attributeName="opacity" dur="18.0s" repeatCount="indefinite" calcMode="discrete" keyTimes="0;0.9111;1" values="0;1;1"/></text>
+</svg>

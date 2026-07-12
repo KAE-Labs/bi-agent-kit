@@ -6,6 +6,10 @@
 
 **A configurable installer for AI-agent tooling aimed at Business Intelligence work.**
 
+<div align="center">
+  <img src=".github/demo.svg" alt="Animated demo of the bi-agent-kit picker installing Power BI and Dataverse MCP servers, then running doctor" width="90%" />
+</div>
+
 `bi-agent-kit` installs BI-related MCP server entries into the config files of the AI coding tools you already use -- Claude Code, Cursor, Gemini CLI, GitHub Copilot, and more -- without ever touching anything else already in those files.
 
 Pick the servers you want, pick which tools to wire them into, and `bi-agent-kit` handles the rest: safe merges, atomic writes, an interactive walkthrough for anything that needs your own account details, and a manifest so entries can be cleanly added or removed later.
@@ -32,7 +36,52 @@ npx bi-agent-kit list
 
 Shows what `bi-agent-kit` currently has installed, and where.
 
-Add `--dry-run` to `init` or `configure` to preview exactly what would be written or removed without touching any file or asking any setup questions.
+```
+npx bi-agent-kit doctor
+```
+
+Health-checks everything previously installed: the manifest, each config file, whether entries were hand-edited or removed outside `bi-agent-kit`, whether required CLIs are still on PATH, and whether any setup placeholder was never filled in. Exits nonzero if anything is broken.
+
+### Flags
+
+| Flag | What it does |
+|---|---|
+| `--dry-run` | Preview exactly what `init`/`configure` would write or remove; nothing is touched and no setup questions are asked |
+| `--servers <ids>` | Non-interactive: comma-separated server ids to install (e.g. `--servers powerbi,fabric`), skipping the picker |
+| `--targets <ids>` | With `--servers`, restrict installation to specific target ids |
+| `--yes` | Skip confirmation prompts (never auto-runs installers) |
+| `--json` | Machine-readable output for `list` and `doctor` |
+| `--help`, `-h` | Usage for every command and flag |
+| `--version`, `-v` | Print the version |
+
+Non-interactive mode never prompts for setup values: placeholder tokens are left in place with a warning so you can fill them in afterward, which makes it safe for scripts, devcontainer hooks, and CI.
+
+### End-to-end example
+
+```
+$ npx bi-agent-kit init
+
+  Select which BI servers to install
+  > [x] Power BI MCP      Semantic model authoring (TMSL/TOM)
+    [x] Dataverse MCP     Dataverse hosted MCP endpoint
+    [ ] Fabric MCP        Fabric REST APIs and workspace operations
+
+  Select which detected config files to install them into
+  > [x] Claude Code (project)   .mcp.json
+    [ ] Cursor (user)           ~/.cursor/mcp.json
+
+  Enter a value for your org url (config.args.3)
+  > https://yourorg.crm.dynamics.com
+
+  add powerbi at .mcp.json: written
+  add dataverse at .mcp.json: written
+```
+
+Then ask your AI tool to do real BI work -- the servers are already wired in:
+
+> "List the tables in my Dataverse environment and draft a Power BI measure for monthly active users."
+
+(Illustrative CLI sketch; exact prompt rendering comes from the interactive picker.)
 
 ## Supported AI tools
 
@@ -45,6 +94,9 @@ Add `--dry-run` to `init` or `configure` to preview exactly what would be writte
 | GitHub Copilot CLI | project + user |
 | GitHub Copilot -- VS Code extension | workspace + user |
 | OpenAI Codex CLI | project + user |
+| Windsurf | user |
+| Roo Code | project |
+| JetBrains Junie | project + user |
 
 The Claude Code VS Code extension shares the CLI's configuration files, so Claude Code support covers the extension automatically.
 

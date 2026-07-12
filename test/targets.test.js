@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { resolveTargets, TARGET_DEFINITIONS } from "../lib/targets.js";
 
-test("TARGET_DEFINITIONS has 13 logical target entries", () => {
-  assert.equal(TARGET_DEFINITIONS.length, 13);
+test("TARGET_DEFINITIONS has 17 logical target entries", () => {
+  assert.equal(TARGET_DEFINITIONS.length, 17);
 });
 
 test("resolveTargets dedupes claude-code and copilot-cli-project onto one entry", () => {

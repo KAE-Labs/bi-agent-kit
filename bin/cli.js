@@ -2,6 +2,7 @@
 import * as clack from "@clack/prompts";
 import path from "node:path";
 import os from "node:os";
+import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -19,16 +20,105 @@ import {
 } from "../lib/commands.js";
 import { isBinaryOnPath } from "../lib/prereq-check.js";
 import { offerInstall } from "../lib/installers.js";
+import { TARGET_DEFINITIONS } from "../lib/targets.js";
 
 const execFileAsync = promisify(execFile);
 
 const SECRET_TOKEN_MARKERS = ["TOKEN", "SECRET", "PASSWORD", "CONNECTION_STRING", "PAT", "KEY", "URI"];
 
+export const VALID_COMMANDS = ["init", "configure", "list", "doctor"];
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+function splitList(value) {
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Pure argv parser -- never prints or exits. The caller decides what to do
+ * with an unrecognized command, --help, --version, etc, which keeps this
+ * function fully unit-testable without a TTY.
+ */
 export function parseArgs(argv) {
   const args = argv.slice(2);
-  const command = args.find((a) => !a.startsWith("-")) || "init";
-  const dryRun = args.includes("--dry-run");
-  return { command, dryRun };
+  const positional = [];
+  const result = {
+    command: null,
+    dryRun: false,
+    yes: false,
+    json: false,
+    help: false,
+    version: false,
+    servers: null,
+    targets: null,
+  };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--dry-run") {
+      result.dryRun = true;
+    } else if (arg === "--yes") {
+      result.yes = true;
+    } else if (arg === "--json") {
+      result.json = true;
+    } else if (arg === "--help" || arg === "-h") {
+      result.help = true;
+    } else if (arg === "--version" || arg === "-v") {
+      result.version = true;
+    } else if (arg === "--servers") {
+      const value = args[i + 1];
+      result.servers = value !== undefined ? splitList(value) : [];
+      if (value !== undefined) i++;
+    } else if (arg.startsWith("--servers=")) {
+      result.servers = splitList(arg.slice("--servers=".length));
+    } else if (arg === "--targets") {
+      const value = args[i + 1];
+      result.targets = value !== undefined ? splitList(value) : [];
+      if (value !== undefined) i++;
+    } else if (arg.startsWith("--targets=")) {
+      result.targets = splitList(arg.slice("--targets=".length));
+    } else if (!arg.startsWith("-")) {
+      positional.push(arg);
+    }
+    // unknown flags are ignored -- the flags above are the full surface area
+  }
+
+  result.command = positional[0] || "init";
+  return result;
+}
+
+function printHelp() {
+  const lines = [
+    "bi-agent-kit -- installs BI-related MCP server entries into AI coding tool configs",
+    "",
+    "Usage: bi-agent-kit <command> [flags]",
+    "",
+    "Commands:",
+    "  init                    Interactively pick BI MCP servers and install them into detected configs",
+    "  configure                Same as init, re-run any time to change your selections",
+    "  list                     Show what bi-agent-kit has installed, grouped by target config file",
+    "  doctor                   Check the environment for common setup problems",
+    "",
+    "Flags:",
+    "  --dry-run                Show what would change without writing anything",
+    "  --yes                    Skip confirmations; never runs installers without an explicit interactive yes",
+    "  --json                   Machine-readable output (list, doctor)",
+    "  --servers <ids>          Comma-separated server template ids, skips the interactive picker",
+    "  --targets <ids>          Comma-separated target ids (see lib/targets.js), restricts --servers to these targets",
+    "  --help, -h               Show this help and exit",
+    "  --version, -v            Show the installed version and exit",
+  ];
+  console.log(lines.join("\n"));
+}
+
+async function printVersion() {
+  const packageJsonPath = path.join(here, "..", "package.json");
+  const text = await fs.readFile(packageJsonPath, "utf8");
+  const pkg = JSON.parse(text);
+  console.log(pkg.version);
 }
 
 function formatChoiceLabel(group, template) {
@@ -37,6 +127,15 @@ function formatChoiceLabel(group, template) {
 
 function looksSecretLike(token) {
   return SECRET_TOKEN_MARKERS.some((marker) => token.includes(marker));
+}
+
+function labelForTargetIds(targetIds) {
+  return (targetIds || [])
+    .map((id) => {
+      const def = TARGET_DEFINITIONS.find((d) => d.id === id);
+      return def ? def.label : id;
+    })
+    .join(", ");
 }
 
 async function warnIfSecretNotGitignored({ dir, absPath }) {
@@ -111,25 +210,108 @@ async function offerPacAuthWalkthrough() {
   }
 }
 
-async function runInteractive(command, dryRun) {
-  clack.intro("bi-agent-kit");
+function describeExternallyManagedGuidance() {
+  return "The entry stays untouched; remove or rename it by hand first if you want bi-agent-kit to manage it.";
+}
 
-  if (command === "list") {
-    const installed = await listInstalled({ dir: process.cwd() });
-    if (installed.length === 0) {
-      clack.log.info("Nothing installed yet. Run npx bi-agent-kit init to get started.");
-    } else {
-      for (const entry of installed) {
-        clack.log.info(entry.serverId + " -> " + entry.absPath);
-      }
-    }
+async function runList({ dir, json }) {
+  const installed = await listInstalled({ dir });
+
+  if (json) {
+    console.log(JSON.stringify(installed, null, 2));
+    return;
+  }
+
+  clack.intro("bi-agent-kit");
+  if (installed.length === 0) {
+    clack.log.info("Nothing installed yet. Run npx bi-agent-kit init to get started.");
     clack.outro("Done.");
     return;
   }
 
+  const byPath = new Map();
+  for (const entry of installed) {
+    if (!byPath.has(entry.absPath)) byPath.set(entry.absPath, []);
+    byPath.get(entry.absPath).push(entry);
+  }
+
+  for (const [absPath, entries] of byPath) {
+    clack.log.step(labelForTargetIds(entries[0].targetIds) + " (" + absPath + ")");
+    for (const entry of entries) {
+      clack.log.info("  " + entry.serverId + " -- installed " + (entry.installedAt || "unknown date"));
+    }
+  }
+  clack.outro("Done.");
+}
+
+async function runDoctor({ dir, homedir, platform, json }) {
+  const { runDoctor: doctor } = await import("../lib/doctor.js");
+  const findings = await doctor({ dir, homedir, platform });
+
+  if (json) {
+    console.log(JSON.stringify(findings, null, 2));
+  } else {
+    clack.intro("bi-agent-kit doctor");
+    for (const finding of findings) {
+      const message = "[" + finding.area + "] " + finding.message;
+      if (finding.level === "error") clack.log.error(message);
+      else if (finding.level === "warn") clack.log.warn(message);
+      else clack.log.info(message);
+    }
+    clack.outro("Done.");
+  }
+
+  const hasError = findings.some((f) => f.level === "error");
+  process.exitCode = hasError ? 1 : 0;
+}
+
+/**
+ * Cross product of requested server ids x detected groups, restricted to
+ * groups whose targetIds intersect the requested target ids (if any).
+ * Throws with a message listing the valid ids when given an unknown id.
+ */
+function buildNonInteractiveSelections({ servers, targets, groups, templates }) {
+  const validServerIds = templates.map((t) => t.id);
+  for (const serverId of servers) {
+    if (!validServerIds.includes(serverId)) {
+      throw new Error(
+        "Unknown server id: " + serverId + ". Valid server ids: " + validServerIds.join(", ")
+      );
+    }
+  }
+
+  const validTargetIds = TARGET_DEFINITIONS.map((t) => t.id);
+  if (targets) {
+    for (const targetId of targets) {
+      if (!validTargetIds.includes(targetId)) {
+        throw new Error(
+          "Unknown target id: " + targetId + ". Valid target ids: " + validTargetIds.join(", ")
+        );
+      }
+    }
+  }
+
+  const matchingGroups = targets
+    ? groups.filter((group) => group.targetIds.some((id) => targets.includes(id)))
+    : groups;
+
+  const selections = [];
+  for (const serverId of servers) {
+    for (const group of matchingGroups) {
+      selections.push({ absPath: group.absPath, serverId });
+    }
+  }
+  return selections;
+}
+
+async function runInstallFlow(parsed) {
+  clack.intro("bi-agent-kit");
+
   const dir = process.cwd();
   const homedir = os.homedir();
   const platform = process.platform;
+  const { dryRun, yes } = parsed;
+  const nonInteractive = parsed.servers !== null;
 
   const groups = await getDetectedTargetGroups({ dir, homedir, platform });
   if (groups.length === 0) {
@@ -143,12 +325,13 @@ async function runInteractive(command, dryRun) {
   const previousKeys = new Set(previousSelections.map((s) => s.absPath + "::" + s.serverId));
 
   const externallyManaged = await findExternallyManagedEntries({ dir, groups, templates });
-  const externallyManagedKeys = new Set(
-    externallyManaged.map((e) => e.absPath + "::" + e.serverId)
-  );
+  const externallyManagedKeys = new Set(externallyManaged.map((e) => e.absPath + "::" + e.serverId));
   if (externallyManaged.length > 0) {
     clack.log.warn(
-      "Skipping " + externallyManaged.length + " entry(ies) already configured outside bi-agent-kit, they will be left as is:"
+      "Skipping " +
+        externallyManaged.length +
+        " entry(ies) already configured outside bi-agent-kit, they will be left as is. " +
+        describeExternallyManagedGuidance()
     );
     for (const entry of externallyManaged) {
       clack.log.info("  " + entry.serverId + " at " + entry.absPath);
@@ -162,7 +345,8 @@ async function runInteractive(command, dryRun) {
     if (!found) missingBinaries.add(template.requiresBinary);
   }
 
-  if (!dryRun) {
+  const canPromptForInstalls = !dryRun && !nonInteractive && !yes;
+  if (canPromptForInstalls) {
     for (const binaryName of Array.from(missingBinaries)) {
       const wantsInstall = await clack.confirm({
         message: binaryName + " was not found on PATH. Install it now?",
@@ -184,46 +368,63 @@ async function runInteractive(command, dryRun) {
     }
   }
 
-  const options = [];
-  for (const group of groups) {
-    for (const template of templates) {
-      const value = group.absPath + "::" + template.id;
-      if (externallyManagedKeys.has(value)) continue;
-      let label = formatChoiceLabel(group, template);
-      if (template.requiresBinary && missingBinaries.has(template.requiresBinary)) {
-        label += " (requires " + template.requiresBinary + " on PATH, not found)";
-      }
-      options.push({
-        value,
-        label,
+  let newSelections;
+
+  if (nonInteractive) {
+    let raw;
+    try {
+      raw = buildNonInteractiveSelections({
+        servers: parsed.servers,
+        targets: parsed.targets,
+        groups,
+        templates,
       });
+    } catch (err) {
+      clack.log.error(err.message);
+      process.exit(1);
     }
+    newSelections = raw.filter((s) => !externallyManagedKeys.has(s.absPath + "::" + s.serverId));
+  } else {
+    const serverOptions = templates.map((template) => ({
+      value: template.id,
+      label: template.label + (template.description ? " -- " + template.description : ""),
+    }));
+    const previousServerIds = new Set(previousSelections.map((s) => s.serverId));
+    const chosenServers = await clack.multiselect({
+      message: "Select which BI servers to install",
+      options: serverOptions,
+      initialValues: templates.map((t) => t.id).filter((id) => previousServerIds.has(id)),
+      required: false,
+    });
+    if (clack.isCancel(chosenServers)) {
+      clack.cancel("Cancelled.");
+      process.exit(1);
+    }
+
+    const previousAbsPaths = new Set(previousSelections.map((s) => s.absPath));
+    const targetOptions = groups.map((group) => ({
+      value: group.absPath,
+      label: labelForTargetIds(group.targetIds) + " (" + group.absPath + ")",
+    }));
+    const chosenTargets = await clack.multiselect({
+      message: "Select which detected config files to install into",
+      options: targetOptions,
+      initialValues: groups.map((g) => g.absPath).filter((absPath) => previousAbsPaths.has(absPath)),
+      required: false,
+    });
+    if (clack.isCancel(chosenTargets)) {
+      clack.cancel("Cancelled.");
+      process.exit(1);
+    }
+
+    const raw = [];
+    for (const serverId of chosenServers) {
+      for (const absPath of chosenTargets) {
+        raw.push({ absPath, serverId });
+      }
+    }
+    newSelections = raw.filter((s) => !externallyManagedKeys.has(s.absPath + "::" + s.serverId));
   }
-
-  if (options.length === 0) {
-    clack.log.warn("Every detected server slot is already configured outside bi-agent-kit. Nothing left to offer.");
-    clack.outro("Nothing to do.");
-    return;
-  }
-
-  const initialValues = options.map((o) => o.value).filter((value) => previousKeys.has(value));
-
-  const chosen = await clack.multiselect({
-    message: "Select which BI servers to install into which detected config files",
-    options,
-    initialValues,
-    required: false,
-  });
-
-  if (clack.isCancel(chosen)) {
-    clack.cancel("Cancelled.");
-    process.exit(1);
-  }
-
-  const newSelections = chosen.map((value) => {
-    const [absPath, serverId] = value.split("::");
-    return { absPath, serverId };
-  });
 
   const { toAdd } = computeDiff({ previousSelections, newSelections });
   const toAddKeys = new Set(toAdd.map((s) => s.absPath + "::" + s.serverId));
@@ -244,6 +445,21 @@ async function runInteractive(command, dryRun) {
       if (template && template.id === "pac-cli") pacCliJustConfigured = true;
       continue;
     }
+
+    if (nonInteractive) {
+      clack.log.warn(
+        template.label +
+          " at " +
+          selection.absPath +
+          " still contains REPLACE_ placeholder values. Edit " +
+          selection.absPath +
+          " directly, or re-run interactively to fill them in."
+      );
+      selections.push(selection);
+      if (template.id === "pac-cli") pacCliJustConfigured = true;
+      continue;
+    }
+
     clack.log.step("Setup needed for " + template.label + " at " + selection.absPath);
     const answers = [];
     for (const placeholder of placeholders) {
@@ -260,6 +476,14 @@ async function runInteractive(command, dryRun) {
         if (looksSecretLike(placeholder.token)) {
           secretSelectionKeys.add(key);
         }
+      } else {
+        clack.log.warn(
+          "Left " +
+            placeholder.token +
+            " unset -- that literal token stays in the written config, and " +
+            template.label +
+            " will not work until you edit it."
+        );
       }
     }
     const configOverride = applyPlaceholderValues(template.config, answers);
@@ -279,7 +503,7 @@ async function runInteractive(command, dryRun) {
     }
   }
 
-  if (!dryRun) {
+  if (!dryRun && !nonInteractive && !yes) {
     const pacAvailable = await isBinaryOnPath("pac");
     if (pacAvailable && pacCliJustConfigured) {
       await offerPacAuthWalkthrough();
@@ -289,11 +513,40 @@ async function runInteractive(command, dryRun) {
   clack.outro(dryRun ? "Dry run complete, nothing was written." : "Done.");
 }
 
-const { command, dryRun } = parseArgs(process.argv);
+async function main(parsed) {
+  if (parsed.help) {
+    printHelp();
+    process.exit(0);
+  }
+  if (parsed.version) {
+    await printVersion();
+    process.exit(0);
+  }
+  if (!VALID_COMMANDS.includes(parsed.command)) {
+    console.error(
+      "Unknown command: " + parsed.command + ". Valid commands: " + VALID_COMMANDS.join(", ")
+    );
+    process.exit(1);
+  }
+
+  if (parsed.command === "list") {
+    await runList({ dir: process.cwd(), json: parsed.json });
+    return;
+  }
+
+  if (parsed.command === "doctor") {
+    await runDoctor({ dir: process.cwd(), homedir: os.homedir(), platform: process.platform, json: parsed.json });
+    return;
+  }
+
+  await runInstallFlow(parsed);
+}
+
+const parsedArgs = parseArgs(process.argv);
 const isMainModule =
   process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMainModule) {
-  runInteractive(command, dryRun).catch((err) => {
+  main(parsedArgs).catch((err) => {
     clack.log.error(err.message);
     process.exit(1);
   });
