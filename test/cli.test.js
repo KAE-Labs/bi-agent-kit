@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseArgs, VALID_COMMANDS, findPreviousEntriesForPair } from "../bin/cli.js";
+import { parseArgs, VALID_COMMANDS, findPreviousEntriesForPair, previousTemplateIds, targetsOutsideFilter } from "../bin/cli.js";
 import { parseServerSpec } from "../lib/commands.js";
 
 test("parseArgs defaults to the init command with dry run false", () => {
@@ -342,4 +342,107 @@ test("parseArgs parses --from= form into a file path", () => {
 test("parseArgs leaves --from null when not provided", () => {
   const result = parseArgs(["node", "cli.js", "init"]);
   assert.equal(result.from, null);
+});
+
+
+// --- previousTemplateIds (BLOCKING 1 regression) ----------------------------
+//
+// Reproduces the confirmed bug: with dataverse:dev and dataverse:prod already
+// installed (instance-keyed serverIds, no bare "dataverse" entry), the server
+// picker initialValues previously filtered templates.map(t => t.id) against a
+// Set of raw serverIds, so "dataverse" was never pre-checked and the picker
+// showed it unchecked -- unchecking it on apply wiped both instances.
+
+test("previousTemplateIds includes the base template id when only instance-keyed entries exist", () => {
+  const previousSelections = [
+    { absPath: "/a.json", serverId: "dataverse-dev", templateId: "dataverse" },
+    { absPath: "/a.json", serverId: "dataverse-prod", templateId: "dataverse" },
+  ];
+  const result = previousTemplateIds({ previousSelections, templates: fakeTemplates });
+  assert.ok(result.has("dataverse"));
+});
+
+test("previousTemplateIds matches what the picker initialValues filter needs: every previously installed template id, base or instanced", () => {
+  const previousSelections = [
+    { absPath: "/a.json", serverId: "dataverse-dev", templateId: "dataverse" },
+    { absPath: "/a.json", serverId: "powerbi", templateId: "powerbi" },
+  ];
+  const result = previousTemplateIds({ previousSelections, templates: fakeTemplates });
+  const templateIds = fakeTemplates.map((t) => t.id).filter((id) => result.has(id));
+  assert.deepEqual(templateIds.sort(), ["dataverse", "powerbi"]);
+});
+
+test("previousTemplateIds falls back to parsing the base id out of serverId for old manifests without templateId", () => {
+  const previousSelections = [{ absPath: "/a.json", serverId: "dataverse-dev" }];
+  const result = previousTemplateIds({ previousSelections, templates: fakeTemplates });
+  assert.ok(result.has("dataverse"));
+});
+
+test("previousTemplateIds is empty for no previous selections", () => {
+  const result = previousTemplateIds({ previousSelections: [], templates: fakeTemplates });
+  assert.equal(result.size, 0);
+});
+
+// --- targetsOutsideFilter (SHOULD-FIX 5 regression: pure predicate) --------
+
+test("targetsOutsideFilter returns an empty array when there is no filter", () => {
+  assert.deepEqual(targetsOutsideFilter(["claude-code", "copilot-cli-project"], null), []);
+});
+
+test("targetsOutsideFilter returns ids outside the filter when the group is shared by more tools than the filter names", () => {
+  const result = targetsOutsideFilter(["claude-code", "copilot-cli-project"], ["claude-code"]);
+  assert.deepEqual(result, ["copilot-cli-project"]);
+});
+
+test("targetsOutsideFilter returns an empty array when the filter already covers every id sharing the file", () => {
+  const result = targetsOutsideFilter(["claude-code", "copilot-cli-project"], ["claude-code", "copilot-cli-project"]);
+  assert.deepEqual(result, []);
+});
+
+// --- parseArgs value-swallowing (SHOULD-FIX 7 regression) -------------------
+//
+// Reproduces the confirmed bug: --servers --yes consumed "--yes" as the
+// servers value instead of being recognized as its own flag.
+
+test("parseArgs rejects --servers immediately followed by another flag instead of swallowing it", () => {
+  const result = parseArgs(["node", "cli.js", "configure", "--servers", "--yes"]);
+  assert.deepEqual(result.servers, []);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /--servers/);
+  assert.equal(result.yes, true);
+});
+
+test("parseArgs rejects --servers with no following value at all", () => {
+  const result = parseArgs(["node", "cli.js", "configure", "--servers"]);
+  assert.deepEqual(result.servers, []);
+  assert.equal(result.errors.length, 1);
+});
+
+test("parseArgs rejects --targets, --out, and --from when each swallows a following flag", () => {
+  const targetsResult = parseArgs(["node", "cli.js", "configure", "--targets", "--yes"]);
+  assert.equal(targetsResult.errors.length, 1);
+  assert.match(targetsResult.errors[0], /--targets/);
+  assert.equal(targetsResult.yes, true);
+
+  const outResult = parseArgs(["node", "cli.js", "export", "--out", "--yes"]);
+  assert.equal(outResult.errors.length, 1);
+  assert.match(outResult.errors[0], /--out/);
+  assert.equal(outResult.yes, true);
+
+  const fromResult = parseArgs(["node", "cli.js", "init", "--from", "--dry-run"]);
+  assert.equal(fromResult.errors.length, 1);
+  assert.match(fromResult.errors[0], /--from/);
+  assert.equal(fromResult.dryRun, true);
+});
+
+test("parseArgs defaults errors to an empty array for well-formed input", () => {
+  const result = parseArgs(["node", "cli.js", "configure", "--servers", "powerbi", "--yes"]);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.servers, ["powerbi"]);
+});
+
+test("parseArgs still accepts --servers= and --out= forms unaffected by the value-swallowing guard", () => {
+  const result = parseArgs(["node", "cli.js", "configure", "--servers=powerbi"]);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.servers, ["powerbi"]);
 });

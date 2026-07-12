@@ -79,7 +79,7 @@ Picks an already-installed entry from a list and re-runs its setup walkthrough i
 |---|---|
 | `--dry-run` | Preview exactly what `init`/`configure`/`reconfigure` would write or remove; nothing is touched and no setup questions are asked |
 | `--servers <ids>` | Non-interactive: comma-separated server specs to install (e.g. `--servers powerbi,fabric`), skipping the picker. Adds or updates the listed servers without touching any others already installed |
-| `--prune` | With `--servers`, remove anything not listed instead of only adding/updating (full-sync semantics) |
+| `--prune` | With `--servers`, remove anything not listed instead of only adding/updating (full-sync semantics). Limited to the files targeted by `--targets` when given -- entries in files outside that scope are left untouched even if not re-listed. |
 | `--targets <ids>` | With `--servers`, restrict installation to specific target ids |
 | `--out <file>` | With `export`, write the document to a file instead of stdout |
 | `--from <file>` | With `init`, import a portable `export` document and install non-interactively |

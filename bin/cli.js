@@ -21,13 +21,17 @@ import {
   parseServerSpec,
   getInstalledEntries,
   reconfigureEntry,
+  getEntryDrift,
   exportConfig,
   buildSelectionsFromConfig,
+  isProtectedExportPath,
 } from "../lib/commands.js";
 import { isBinaryOnPath } from "../lib/prereq-check.js";
 import { offerInstall } from "../lib/installers.js";
 import { TARGET_DEFINITIONS, resolveTargets } from "../lib/targets.js";
 import { removeServerFromTarget } from "../lib/merge-config.js";
+import { acquireLock } from "../lib/lock.js";
+import { atomicWriteFile } from "../lib/atomic-fs.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,6 +53,20 @@ function splitList(value) {
  * with an unrecognized command, --help, --version, etc, which keeps this
  * function fully unit-testable without a TTY.
  */
+// Value-taking flags (--servers, --targets, --out, --from) must not swallow
+// the NEXT flag as their value -- e.g. `--servers --yes` should report an
+// error naming --servers, not silently consume "--yes" as a server id.
+// Returns { value, consumed }: consumed is false when the next token is
+// missing or itself looks like a flag (starts with "--"), in which case the
+// caller must not advance past it.
+function readFlagValue(args, i) {
+  const value = args[i + 1];
+  if (value === undefined || value.startsWith("--")) {
+    return { value: undefined, consumed: false };
+  }
+  return { value, consumed: true };
+}
+
 export function parseArgs(argv) {
   const args = argv.slice(2);
   const positional = [];
@@ -65,6 +83,7 @@ export function parseArgs(argv) {
     out: null,
     from: null,
     rest: [],
+    errors: [],
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -82,27 +101,47 @@ export function parseArgs(argv) {
     } else if (arg === "--version" || arg === "-v") {
       result.version = true;
     } else if (arg === "--servers") {
-      const value = args[i + 1];
-      result.servers = value !== undefined ? splitList(value) : [];
-      if (value !== undefined) i++;
+      const { value, consumed } = readFlagValue(args, i);
+      if (!consumed) {
+        result.errors.push("Flag --servers requires a value.");
+        result.servers = [];
+      } else {
+        result.servers = splitList(value);
+        i++;
+      }
     } else if (arg.startsWith("--servers=")) {
       result.servers = splitList(arg.slice("--servers=".length));
     } else if (arg === "--targets") {
-      const value = args[i + 1];
-      result.targets = value !== undefined ? splitList(value) : [];
-      if (value !== undefined) i++;
+      const { value, consumed } = readFlagValue(args, i);
+      if (!consumed) {
+        result.errors.push("Flag --targets requires a value.");
+        result.targets = [];
+      } else {
+        result.targets = splitList(value);
+        i++;
+      }
     } else if (arg.startsWith("--targets=")) {
       result.targets = splitList(arg.slice("--targets=".length));
     } else if (arg === "--out") {
-      const value = args[i + 1];
-      result.out = value !== undefined ? value : null;
-      if (value !== undefined) i++;
+      const { value, consumed } = readFlagValue(args, i);
+      if (!consumed) {
+        result.errors.push("Flag --out requires a value.");
+        result.out = null;
+      } else {
+        result.out = value;
+        i++;
+      }
     } else if (arg.startsWith("--out=")) {
       result.out = arg.slice("--out=".length);
     } else if (arg === "--from") {
-      const value = args[i + 1];
-      result.from = value !== undefined ? value : null;
-      if (value !== undefined) i++;
+      const { value, consumed } = readFlagValue(args, i);
+      if (!consumed) {
+        result.errors.push("Flag --from requires a value.");
+        result.from = null;
+      } else {
+        result.from = value;
+        i++;
+      }
     } else if (arg.startsWith("--from=")) {
       result.from = arg.slice("--from=".length);
     } else if (!arg.startsWith("-")) {
@@ -411,6 +450,19 @@ function resolveEntryTemplateId(entry, templates) {
 }
 
 /**
+ * Set of base template ids that have ANY previous entry (base or named
+ * instance) on any target, derived via resolveEntryTemplateId. This is what
+ * the server picker's initialValues must be built from -- previousSelections
+ * are instance-keyed (serverId like "dataverse-dev"), so a naive
+ * `previousSelections.map(s => s.serverId)` set never matches the bare
+ * template id "dataverse" and the picker shows it unchecked even though an
+ * instance is already installed everywhere.
+ */
+export function previousTemplateIds({ previousSelections, templates }) {
+  return new Set(previousSelections.map((entry) => resolveEntryTemplateId(entry, templates)));
+}
+
+/**
  * For each already-installed (templateId, absPath) pair among the chosen
  * servers/targets, asks the user whether to keep it as is, reconfigure it in
  * place, or add a new named instance alongside it. Previous selections are
@@ -600,18 +652,32 @@ async function runInstallFlow(parsed) {
       clack.log.error(err.message);
       process.exit(1);
     }
-    const merged = mergeWithPrevious({ previousSelections, newSelections: raw, prune: parsed.prune });
+    // scopePaths limits what --prune is allowed to remove: the absPaths of the
+    // groups actually in play for this run. With --targets, that is only the
+    // restricted subset (so `--targets claude-code --prune` cannot touch a
+    // powerbi entry living in .cursor/mcp.json); without --targets it is every
+    // detected group, i.e. the previous unscoped full-prune behavior.
+    const scopeGroups = parsed.targets
+      ? groups.filter((group) => group.targetIds.some((id) => parsed.targets.includes(id)))
+      : groups;
+    const scopePaths = new Set(scopeGroups.map((g) => g.absPath));
+    const merged = mergeWithPrevious({
+      previousSelections,
+      newSelections: raw,
+      prune: parsed.prune,
+      scopePaths,
+    });
     newSelections = merged.filter((s) => !externallyManagedKeys.has(s.absPath + "::" + s.serverId));
   } else {
     const serverOptions = templates.map((template) => ({
       value: template.id,
       label: template.label + (template.description ? " -- " + template.description : ""),
     }));
-    const previousServerIds = new Set(previousSelections.map((s) => s.serverId));
+    const previousTemplateIdSet = previousTemplateIds({ previousSelections, templates });
     const chosenServers = await clack.multiselect({
       message: "Select which BI servers to install",
       options: serverOptions,
-      initialValues: templates.map((t) => t.id).filter((id) => previousServerIds.has(id)),
+      initialValues: templates.map((t) => t.id).filter((id) => previousTemplateIdSet.has(id)),
       required: false,
     });
     if (clack.isCancel(chosenServers)) {
@@ -770,6 +836,26 @@ async function runReconfigure(parsed) {
     return;
   }
 
+  const drift = await getEntryDrift({
+    dir,
+    homedir,
+    platform,
+    absPath: chosen.absPath,
+    serverId: chosen.serverId,
+  });
+  if (drift) {
+    clack.log.warn(
+      chosen.serverId + " at " + chosen.absPath +
+        " was modified outside bi-agent-kit since it was last written. Reconfiguring will overwrite those changes."
+    );
+    const proceed = await clack.confirm({ message: "Overwrite the hand-edited entry?" });
+    if (clack.isCancel(proceed) || !proceed) {
+      clack.log.info("Skipped -- nothing was written.");
+      clack.outro("Done.");
+      return;
+    }
+  }
+
   if (!chosen.hasPlaceholders) {
     clack.log.info(template.label + " has no configurable placeholders -- reapplying its default configuration.");
   } else {
@@ -792,6 +878,20 @@ async function runReconfigure(parsed) {
   clack.outro("Done.");
 }
 
+/**
+ * Pure predicate for the shared-target confirmation gate: given a group's
+ * full targetIds and a --targets filter (or null/undefined when no filter is
+ * given), returns the ids that are outside the filter -- i.e. the other
+ * tools sharing this one target file that a filtered removal would still
+ * affect, since one file has exactly one key regardless of how many logical
+ * targets resolve to it. Empty when there is no filter, or every id sharing
+ * the file is already covered by it.
+ */
+export function targetsOutsideFilter(groupTargetIds, targetFilter) {
+  if (!targetFilter) return [];
+  return groupTargetIds.filter((id) => !targetFilter.includes(id));
+}
+
 async function runRemove(parsed) {
   clack.intro("bi-agent-kit remove");
 
@@ -810,40 +910,61 @@ async function runRemove(parsed) {
   const allGroups = resolveTargets(dir, homedir, platform);
   const targetFilter = parsed.targets;
 
-  for (const raw of specs) {
-    let spec;
-    try {
-      spec = parseServerSpec(raw);
-    } catch (err) {
-      clack.log.error(err.message);
-      continue;
-    }
-
-    const matches = previousSelections.filter((entry) => {
-      if (entry.serverId !== spec.serverId) return false;
-      if (!targetFilter) return true;
-      const group = allGroups.find((g) => g.absPath === entry.absPath);
-      return group ? group.targetIds.some((id) => targetFilter.includes(id)) : false;
-    });
-
-    if (matches.length === 0) {
-      clack.log.info(spec.serverId + ": not-installed");
-      continue;
-    }
-
-    for (const entry of matches) {
-      if (parsed.dryRun) {
-        clack.log.info("Would remove " + entry.serverId + " at " + entry.absPath);
+  const release = parsed.dryRun ? null : await acquireLock(path.join(dir, ".kae-bi-kit.lock"));
+  try {
+    for (const raw of specs) {
+      let spec;
+      try {
+        spec = parseServerSpec(raw);
+      } catch (err) {
+        clack.log.error(err.message);
         continue;
       }
-      const group = allGroups.find((g) => g.absPath === entry.absPath);
-      if (!group) {
-        clack.log.warn(entry.serverId + " at " + entry.absPath + ": target not resolvable on this machine, skipping");
+
+      const matches = previousSelections.filter((entry) => {
+        if (entry.serverId !== spec.serverId) return false;
+        if (!targetFilter) return true;
+        const group = allGroups.find((g) => g.absPath === entry.absPath);
+        return group ? group.targetIds.some((id) => targetFilter.includes(id)) : false;
+      });
+
+      if (matches.length === 0) {
+        clack.log.info(spec.serverId + ": not-installed");
         continue;
       }
-      const result = await removeServerFromTarget({ dir, resolvedTarget: group, serverKey: entry.serverId });
-      clack.log.info(entry.serverId + " at " + entry.absPath + ": " + result.status);
+
+      for (const entry of matches) {
+        if (parsed.dryRun) {
+          clack.log.info("Would remove " + entry.serverId + " at " + entry.absPath);
+          continue;
+        }
+        const group = allGroups.find((g) => g.absPath === entry.absPath);
+        if (!group) {
+          clack.log.warn(entry.serverId + " at " + entry.absPath + ": target not resolvable on this machine, skipping");
+          continue;
+        }
+
+        const outsideTargets = targetsOutsideFilter(group.targetIds, targetFilter);
+        if (outsideTargets.length > 0) {
+          clack.log.warn(
+            entry.serverId + " at " + entry.absPath + " is shared by these tools via one file: " +
+              labelForTargetIds(outsideTargets) + ". Removing it affects all of them."
+          );
+          if (!parsed.yes) {
+            const proceed = await clack.confirm({ message: "Remove anyway?" });
+            if (clack.isCancel(proceed) || !proceed) {
+              clack.log.info("Skipped " + entry.serverId + " at " + entry.absPath);
+              continue;
+            }
+          }
+        }
+
+        const result = await removeServerFromTarget({ dir, resolvedTarget: group, serverKey: entry.serverId });
+        clack.log.info(entry.serverId + " at " + entry.absPath + ": " + result.status);
+      }
     }
+  } finally {
+    if (release) await release();
   }
 
   clack.outro(parsed.dryRun ? "Dry run complete, nothing was removed." : "Done.");
@@ -856,7 +977,16 @@ async function runExport(parsed) {
   const text = JSON.stringify(doc, null, 2) + "\n";
 
   if (parsed.out) {
-    await fs.writeFile(path.resolve(parsed.out), text, "utf8");
+    const resolvedOut = path.resolve(parsed.out);
+    const groups = resolveTargets(dir, os.homedir(), process.platform);
+    if (isProtectedExportPath({ dir, outPath: resolvedOut, groups })) {
+      clack.log.error(
+        "Refusing to write export to " + resolvedOut +
+          ": it would overwrite the manifest, its backup, or a target config file."
+      );
+      process.exit(1);
+    }
+    await atomicWriteFile(resolvedOut, text);
     clack.log.success("Wrote " + parsed.out);
   } else {
     console.log(text);
@@ -871,6 +1001,12 @@ async function main(parsed) {
   if (parsed.version) {
     await printVersion();
     process.exit(0);
+  }
+  if (parsed.errors && parsed.errors.length > 0) {
+    for (const message of parsed.errors) {
+      console.error(message);
+    }
+    process.exit(1);
   }
   if (!VALID_COMMANDS.includes(parsed.command)) {
     console.error(

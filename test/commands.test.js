@@ -16,10 +16,12 @@ import {
   parseServerSpec,
   getInstalledEntries,
   reconfigureEntry,
+  getEntryDrift,
   getCurrentSelections,
   mergeWithPrevious,
   exportConfig,
   buildSelectionsFromConfig,
+  isProtectedExportPath,
 } from "../lib/commands.js";
 import { resolveTargets } from "../lib/targets.js";
 import { removeServerFromTarget } from "../lib/merge-config.js";
@@ -880,4 +882,232 @@ test("removing a spec that matches nothing installed reports not-installed witho
   const spec = parseServerSpec("powerbi");
   const matches = previousSelections.filter((entry) => entry.serverId === spec.serverId);
   assert.deepEqual(matches, []);
+});
+
+
+// --- mergeWithPrevious: scoped prune (BLOCKING 2 regression) ---------------
+//
+// Reproduces the confirmed bug: configure --servers powerbi --targets
+// claude-code --prune removed a powerbi entry living at .cursor/mcp.json,
+// which was out of the --targets scope for this run. scopePaths is the set
+// of absPaths actually in play; prune must never touch entries outside it.
+
+test("mergeWithPrevious with prune and scopePaths preserves an out-of-scope previous entry", () => {
+  const claudeCodePath = "/project/.mcp.json";
+  const cursorPath = "/project/.cursor/mcp.json";
+  const previousSelections = [
+    { absPath: claudeCodePath, serverId: "powerbi", templateId: "powerbi" },
+    { absPath: cursorPath, serverId: "powerbi", templateId: "powerbi" },
+  ];
+  const merged = mergeWithPrevious({
+    previousSelections,
+    newSelections: [],
+    prune: true,
+    scopePaths: new Set([claudeCodePath]),
+  });
+  assert.deepEqual(merged, [{ absPath: cursorPath, serverId: "powerbi", templateId: "powerbi" }]);
+});
+
+test("mergeWithPrevious with prune and no scopePaths falls back to the unscoped full-prune behavior", () => {
+  const previousSelections = [
+    { absPath: "/a.json", serverId: "powerbi", templateId: "powerbi" },
+    { absPath: "/b.json", serverId: "powerbi", templateId: "powerbi" },
+  ];
+  const merged = mergeWithPrevious({ previousSelections, newSelections: [], prune: true });
+  assert.deepEqual(merged, []);
+});
+
+test("mergeWithPrevious with prune and scopePaths still applies newSelections on top of preserved out-of-scope entries", () => {
+  const inScopePath = "/project/.mcp.json";
+  const outOfScopePath = "/project/.cursor/mcp.json";
+  const previousSelections = [
+    { absPath: inScopePath, serverId: "powerbi", templateId: "powerbi" },
+    { absPath: outOfScopePath, serverId: "dataverse", templateId: "dataverse" },
+  ];
+  const merged = mergeWithPrevious({
+    previousSelections,
+    newSelections: [{ absPath: inScopePath, serverId: "powerbi", templateId: "powerbi" }],
+    prune: true,
+    scopePaths: new Set([inScopePath]),
+  });
+  const keys = merged.map((s) => s.absPath + "::" + s.serverId).sort();
+  assert.deepEqual(keys, ["/project/.cursor/mcp.json::dataverse", "/project/.mcp.json::powerbi"]);
+});
+
+// --- isProtectedExportPath (MEDIUM 3 regression) -----------------------------
+
+test("isProtectedExportPath refuses the manifest path itself", () => {
+  const dir = "/project";
+  const outPath = "/project/.kae-bi-kit.json";
+  const groups = [];
+  assert.equal(isProtectedExportPath({ dir, outPath, groups }), true);
+});
+
+test("isProtectedExportPath refuses the manifest backup path", () => {
+  const dir = "/project";
+  const outPath = "/project/.kae-bi-kit.json.bak";
+  const groups = [];
+  assert.equal(isProtectedExportPath({ dir, outPath, groups }), true);
+});
+
+test("isProtectedExportPath refuses a live target config absPath", () => {
+  const dir = "/project";
+  const outPath = "/project/.mcp.json";
+  const groups = [{ absPath: "/project/.mcp.json", targetIds: ["claude-code"] }];
+  assert.equal(isProtectedExportPath({ dir, outPath, groups }), true);
+});
+
+test("isProtectedExportPath allows an ordinary export file path", () => {
+  const dir = "/project";
+  const outPath = "/project/team-export.json";
+  const groups = [{ absPath: "/project/.mcp.json", targetIds: ["claude-code"] }];
+  assert.equal(isProtectedExportPath({ dir, outPath, groups }), false);
+});
+
+// --- reconfigureEntry drift detection (SHOULD-FIX 4 regression) -------------
+
+test("reconfigureEntry reports drift false when the live value still matches the manifest recorded hash", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "powerbi", templateId: "powerbi" }],
+    dryRun: false,
+  });
+
+  const result = await reconfigureEntry({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    absPath,
+    serverId: "powerbi",
+    configOverride: { command: "npx", args: ["-y", "still-the-same-family"] },
+  });
+  assert.equal(result.drift, false);
+});
+
+test("reconfigureEntry reports drift true after the live file was hand edited outside bi-agent-kit", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "powerbi", templateId: "powerbi" }],
+    dryRun: false,
+  });
+
+  const fileText = await fs.readFile(absPath, "utf8");
+  const parsedFile = JSON.parse(fileText);
+  parsedFile.mcpServers.powerbi = { command: "hand-edited-by-someone-else" };
+  await fs.writeFile(absPath, JSON.stringify(parsedFile, null, 2), "utf8");
+
+  const result = await reconfigureEntry({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    absPath,
+    serverId: "powerbi",
+    configOverride: { command: "npx", args: ["-y", "reconfigured-after-drift"] },
+  });
+  assert.equal(result.drift, true);
+  assert.equal(result.status, "written");
+});
+
+test("getEntryDrift reports false without mutating anything", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "powerbi", templateId: "powerbi" }],
+    dryRun: false,
+  });
+
+  const drift = await getEntryDrift({ dir, homedir: dir, platform: "linux", absPath, serverId: "powerbi" });
+  assert.equal(drift, false);
+
+  const fileTextBefore = await fs.readFile(absPath, "utf8");
+  const fileTextAfter = await fs.readFile(absPath, "utf8");
+  assert.equal(fileTextBefore, fileTextAfter);
+});
+
+test("getEntryDrift reports true after a hand edit, and returns false for an entry that was never installed", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [{ absPath, serverId: "powerbi", templateId: "powerbi" }],
+    dryRun: false,
+  });
+
+  const fileText = await fs.readFile(absPath, "utf8");
+  const parsedFile = JSON.parse(fileText);
+  parsedFile.mcpServers.powerbi = { command: "hand-edited" };
+  await fs.writeFile(absPath, JSON.stringify(parsedFile, null, 2), "utf8");
+
+  const drift = await getEntryDrift({ dir, homedir: dir, platform: "linux", absPath, serverId: "powerbi" });
+  assert.equal(drift, true);
+
+  const neverInstalled = await getEntryDrift({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    absPath: path.join(dir, ".gemini", "settings.json"),
+    serverId: "dataverse",
+  });
+  assert.equal(neverInstalled, false);
+});
+
+// --- buildSelectionsFromConfig dedupe (SHOULD-FIX 8 regression) -------------
+//
+// Reproduces the confirmed bug: init --from plus --prune double-processes a
+// shared-file target -- buildSelectionsFromConfig emitted one selection per
+// targetId, so a spec whose targetIds list includes two ids that both
+// resolve to the same absPath produced two identical selection entries.
+
+test("buildSelectionsFromConfig dedupes selections when a spec targetIds share the same absPath", () => {
+  const groups = [
+    { absPath: "/project/.mcp.json", targetIds: ["claude-code", "copilot-cli-project"] },
+  ];
+  const doc = {
+    version: 1,
+    servers: [{ spec: "powerbi", targetIds: ["claude-code", "copilot-cli-project"] }],
+  };
+  const { selections, skipped } = buildSelectionsFromConfig({ doc, groups });
+  assert.deepEqual(skipped, []);
+  assert.deepEqual(selections, [{ absPath: "/project/.mcp.json", serverId: "powerbi", templateId: "powerbi" }]);
+});
+
+test("buildSelectionsFromConfig dedupe does not drop distinct absPaths for the same spec", () => {
+  const groups = [
+    { absPath: "/a/.mcp.json", targetIds: ["claude-code"] },
+    { absPath: "/b/.cursor/mcp.json", targetIds: ["cursor-project"] },
+  ];
+  const doc = {
+    version: 1,
+    servers: [{ spec: "powerbi", targetIds: ["claude-code", "cursor-project"] }],
+  };
+  const { selections } = buildSelectionsFromConfig({ doc, groups });
+  const keys = selections.map((s) => s.absPath + "::" + s.serverId).sort();
+  assert.deepEqual(keys, ["/a/.mcp.json::powerbi", "/b/.cursor/mcp.json::powerbi"]);
 });
