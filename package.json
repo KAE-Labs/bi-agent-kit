@@ -37,11 +37,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kae-labs/bi-agent-kit.git"
+    "url": "git+https://github.com/KAE-Labs/bi-agent-kit.git"
   },
-  "homepage": "https://github.com/kae-labs/bi-agent-kit#readme",
+  "homepage": "https://github.com/KAE-Labs/bi-agent-kit#readme",
   "bugs": {
-    "url": "https://github.com/kae-labs/bi-agent-kit/issues"
+    "url": "https://github.com/KAE-Labs/bi-agent-kit/issues"
   },
   "author": "KAE Labs LLC (https://kaelabs.dev)",
   "license": "MIT",
