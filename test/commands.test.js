@@ -17,6 +17,7 @@ import {
   getInstalledEntries,
   reconfigureEntry,
   getCurrentSelections,
+  mergeWithPrevious,
 } from "../lib/commands.js";
 
 async function makeTempDir() {
@@ -614,4 +615,105 @@ test("an old manifest entry without a templateId field still resolves its templa
     configOverride: { command: "npx", args: ["-y", "still-works"] },
   });
   assert.equal(reconfigured.status, "written");
+});
+
+// --- mergeWithPrevious ------------------------------------------------------
+
+test("mergeWithPrevious returns the union of previous and new selections when prune is false", () => {
+  const previousSelections = [
+    { absPath: "/a.json", serverId: "dataverse-dev", templateId: "dataverse" },
+    { absPath: "/a.json", serverId: "dataverse-prod", templateId: "dataverse" },
+  ];
+  const newSelections = [{ absPath: "/a.json", serverId: "powerbi", templateId: "powerbi" }];
+  const merged = mergeWithPrevious({ previousSelections, newSelections, prune: false });
+  const keys = merged.map((s) => s.absPath + "::" + s.serverId).sort();
+  assert.deepEqual(keys, ["/a.json::dataverse-dev", "/a.json::dataverse-prod", "/a.json::powerbi"]);
+});
+
+test("mergeWithPrevious returns exactly newSelections when prune is true", () => {
+  const previousSelections = [
+    { absPath: "/a.json", serverId: "dataverse-dev", templateId: "dataverse" },
+    { absPath: "/a.json", serverId: "dataverse-prod", templateId: "dataverse" },
+  ];
+  const newSelections = [{ absPath: "/a.json", serverId: "powerbi", templateId: "powerbi" }];
+  const merged = mergeWithPrevious({ previousSelections, newSelections, prune: true });
+  assert.deepEqual(merged, newSelections);
+});
+
+test("mergeWithPrevious prefers the new entry on a key collision, so a configOverride flows through", () => {
+  const previousSelections = [{ absPath: "/a.json", serverId: "powerbi", templateId: "powerbi" }];
+  const newSelections = [
+    { absPath: "/a.json", serverId: "powerbi", templateId: "powerbi", configOverride: { command: "npx" } },
+  ];
+  const merged = mergeWithPrevious({ previousSelections, newSelections, prune: false });
+  assert.equal(merged.length, 1);
+  assert.deepEqual(merged[0].configOverride, { command: "npx" });
+});
+
+// --- regression: configure --servers powerbi must not remove existing --servers ----
+//
+// Reproduces the confirmed bug: dataverse-dev + dataverse-prod are already
+// installed, and a non-interactive run only listing powerbi must not remove
+// them. applySelections computes a full-state diff against whatever
+// selections it is handed -- mergeWithPrevious is what keeps that diff from
+// seeing the other instances as "gone".
+
+test("applySelections with mergeWithPrevious-additive selections keeps existing instances alongside a newly added server", async () => {
+  const dir = await makeTempDir();
+  const absPath = path.join(dir, ".mcp.json");
+  await fs.writeFile(absPath, "{}", "utf8");
+  const templates = await loadTemplates();
+
+  await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: [
+      { absPath, serverId: "dataverse-dev", templateId: "dataverse" },
+      { absPath, serverId: "dataverse-prod", templateId: "dataverse" },
+    ],
+    dryRun: false,
+  });
+  assert.equal((await listInstalled({ dir })).length, 2);
+
+  const previousSelections = await getCurrentSelections({ dir });
+  const additiveSelections = mergeWithPrevious({
+    previousSelections,
+    newSelections: [{ absPath, serverId: "powerbi", templateId: "powerbi" }],
+    prune: false,
+  });
+
+  const report = await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: additiveSelections,
+    dryRun: false,
+  });
+  assert.equal(report.every((r) => r.action !== "remove"), true);
+
+  const installed = await listInstalled({ dir });
+  const serverIds = installed.map((e) => e.serverId).sort();
+  assert.deepEqual(serverIds, ["dataverse-dev", "dataverse-prod", "powerbi"]);
+
+  const prunedSelections = mergeWithPrevious({
+    previousSelections: await getCurrentSelections({ dir }),
+    newSelections: [{ absPath, serverId: "powerbi", templateId: "powerbi" }],
+    prune: true,
+  });
+  const pruneReport = await applySelections({
+    dir,
+    homedir: dir,
+    platform: "linux",
+    templates,
+    selections: prunedSelections,
+    dryRun: false,
+  });
+  const removed = pruneReport.filter((r) => r.action === "remove").map((r) => r.serverId).sort();
+  assert.deepEqual(removed, ["dataverse-dev", "dataverse-prod"]);
+
+  const afterPrune = await listInstalled({ dir });
+  assert.deepEqual(afterPrune.map((e) => e.serverId), ["powerbi"]);
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseArgs, VALID_COMMANDS } from "../bin/cli.js";
+import { parseArgs, VALID_COMMANDS, findPreviousEntriesForPair } from "../bin/cli.js";
 import { parseServerSpec } from "../lib/commands.js";
 
 test("parseArgs defaults to the init command with dry run false", () => {
@@ -168,4 +168,107 @@ test("parseServerSpec accepts every --servers entry from a mixed spec list", () 
     { templateId: "dataverse", instanceName: "dev", serverId: "dataverse-dev" },
     { templateId: "powerbi", instanceName: null, serverId: "powerbi" },
   ]);
+});
+
+
+// --- --prune flag -----------------------------------------------------------
+
+test("parseArgs defaults prune to false", () => {
+  const result = parseArgs(["node", "cli.js", "configure"]);
+  assert.equal(result.prune, false);
+});
+
+test("parseArgs detects --prune", () => {
+  const result = parseArgs(["node", "cli.js", "configure", "--servers", "powerbi", "--prune"]);
+  assert.equal(result.prune, true);
+  assert.deepEqual(result.servers, ["powerbi"]);
+});
+
+test("parseArgs supports --prune alongside other flags", () => {
+  const result = parseArgs([
+    "node",
+    "cli.js",
+    "configure",
+    "--servers",
+    "powerbi",
+    "--targets",
+    "claude-code",
+    "--prune",
+    "--yes",
+  ]);
+  assert.equal(result.prune, true);
+  assert.equal(result.yes, true);
+  assert.deepEqual(result.targets, ["claude-code"]);
+});
+
+// --- findPreviousEntriesForPair ----------------------------------------------
+//
+// Previous selections are instance-keyed (serverId like "dataverse-dev"), not
+// bare-template-id-keyed. This is the seam that fixes the interactive-picker
+// bug where an already-installed instance was never recognized as installed.
+
+const fakeTemplates = [
+  { id: "dataverse" },
+  { id: "powerbi" },
+  { id: "pac-cli" },
+];
+
+test("findPreviousEntriesForPair matches every instance-keyed previous entry for a base template id", () => {
+  const previousSelections = [
+    { absPath: "/a.json", serverId: "dataverse-dev", templateId: "dataverse" },
+    { absPath: "/a.json", serverId: "dataverse-prod", templateId: "dataverse" },
+    { absPath: "/a.json", serverId: "powerbi", templateId: "powerbi" },
+  ];
+  const result = findPreviousEntriesForPair({
+    previousSelections,
+    absPath: "/a.json",
+    templateId: "dataverse",
+    templates: fakeTemplates,
+  });
+  const serverIds = result.map((e) => e.serverId).sort();
+  assert.deepEqual(serverIds, ["dataverse-dev", "dataverse-prod"]);
+});
+
+test("findPreviousEntriesForPair returns nothing for a different absPath", () => {
+  const previousSelections = [{ absPath: "/a.json", serverId: "dataverse-dev", templateId: "dataverse" }];
+  const result = findPreviousEntriesForPair({
+    previousSelections,
+    absPath: "/b.json",
+    templateId: "dataverse",
+    templates: fakeTemplates,
+  });
+  assert.deepEqual(result, []);
+});
+
+test("findPreviousEntriesForPair falls back to parsing the base id out of serverId when templateId is missing (old manifests)", () => {
+  const previousSelections = [
+    { absPath: "/a.json", serverId: "dataverse-dev" },
+    { absPath: "/a.json", serverId: "pac-cli" },
+  ];
+  const result = findPreviousEntriesForPair({
+    previousSelections,
+    absPath: "/a.json",
+    templateId: "dataverse",
+    templates: fakeTemplates,
+  });
+  assert.deepEqual(result.map((e) => e.serverId), ["dataverse-dev"]);
+
+  const pacResult = findPreviousEntriesForPair({
+    previousSelections,
+    absPath: "/a.json",
+    templateId: "pac-cli",
+    templates: fakeTemplates,
+  });
+  assert.deepEqual(pacResult.map((e) => e.serverId), ["pac-cli"]);
+});
+
+test("findPreviousEntriesForPair does not confuse a bare template id match with an unrelated pair", () => {
+  const previousSelections = [{ absPath: "/a.json", serverId: "powerbi", templateId: "powerbi" }];
+  const result = findPreviousEntriesForPair({
+    previousSelections,
+    absPath: "/a.json",
+    templateId: "dataverse",
+    templates: fakeTemplates,
+  });
+  assert.deepEqual(result, []);
 });

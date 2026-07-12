@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   loadTemplates,
+  mergeWithPrevious,
   getDetectedTargetGroups,
   getCurrentSelections,
   findExternallyManagedEntries,
@@ -57,6 +58,7 @@ export function parseArgs(argv) {
     version: false,
     servers: null,
     targets: null,
+    prune: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -65,6 +67,8 @@ export function parseArgs(argv) {
       result.dryRun = true;
     } else if (arg === "--yes") {
       result.yes = true;
+    } else if (arg === "--prune") {
+      result.prune = true;
     } else if (arg === "--json") {
       result.json = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -112,6 +116,8 @@ function printHelp() {
     "  --json                   Machine-readable output (list, doctor)",
     "  --servers <ids>          Comma-separated server specs, skips the interactive picker.",
     "                            Each spec is templateId or templateId:instanceName (e.g. dataverse:dev)",
+    "                            Adds or updates the listed servers without touching any others already installed.",
+    "  --prune                  With --servers, remove anything not listed instead of only adding/updating (full-sync semantics)",
     "  --targets <ids>          Comma-separated target ids (see lib/targets.js), restricts --servers to these targets",
     "  --help, -h               Show this help and exit",
     "  --version, -v            Show the installed version and exit",
@@ -360,22 +366,51 @@ function buildNonInteractiveSelections({ servers, targets, groups, templates }) 
 }
 
 /**
- * For each already-installed (serverId, absPath) pair among the chosen
+ * Resolves which previous selections belong to a given (templateId, absPath)
+ * pair. Previous selections are instance-keyed (serverId like "dataverse-dev"),
+ * so this matches on the entry's own templateId, falling back to parsing the
+ * base template id out of its serverId (bare id, or "templateId-instance")
+ * for older manifests that never recorded templateId.
+ */
+export function findPreviousEntriesForPair({ previousSelections, absPath, templateId, templates }) {
+  return previousSelections.filter(
+    (entry) => entry.absPath === absPath && resolveEntryTemplateId(entry, templates) === templateId
+  );
+}
+
+function resolveEntryTemplateId(entry, templates) {
+  if (entry.templateId && templates.some((t) => t.id === entry.templateId)) {
+    return entry.templateId;
+  }
+  if (templates.some((t) => t.id === entry.serverId)) return entry.serverId;
+  const match = templates.find((t) => entry.serverId.startsWith(t.id + "-"));
+  return match ? match.id : entry.templateId || entry.serverId;
+}
+
+/**
+ * For each already-installed (templateId, absPath) pair among the chosen
  * servers/targets, asks the user whether to keep it as is, reconfigure it in
- * place, or add a new named instance alongside it. Returns the resulting
- * selections list (skip/new-instance both contribute selections that survive
- * the diff; reconfigure additionally runs its walkthrough immediately and is
- * reported separately since it never appears in `toAdd`).
+ * place, or add a new named instance alongside it. Previous selections are
+ * instance-keyed, so a single pair may have more than one previous entry
+ * (e.g. dataverse-dev and dataverse-prod) -- "keep" carries every one of them
+ * forward unchanged, "reconfigure" lets the user pick which one (if more than
+ * one) and only that one gets a walkthrough, and "add as new instance" carries
+ * all existing ones forward and appends a new suffixed selection. A bare
+ * base-id selection is only ever pushed when no previous entry exists for the
+ * pair. Returns the resulting selections list (skip/new-instance both
+ * contribute selections that survive the diff; reconfigure additionally runs
+ * its walkthrough immediately and is reported separately since it never
+ * appears in `toAdd`).
  */
 async function resolveInteractiveSelections({ chosenServers, chosenTargets, previousSelections, templates, dryRun }) {
-  const previousKeys = new Set(previousSelections.map((s) => s.absPath + "::" + s.serverId));
   const raw = [];
   const reconfigured = [];
 
   for (const templateId of chosenServers) {
     for (const absPath of chosenTargets) {
-      const key = absPath + "::" + templateId;
-      if (!previousKeys.has(key)) {
+      const previousEntries = findPreviousEntriesForPair({ previousSelections, absPath, templateId, templates });
+
+      if (previousEntries.length === 0) {
         raw.push({ absPath, serverId: templateId, templateId });
         continue;
       }
@@ -393,27 +428,43 @@ async function resolveInteractiveSelections({ chosenServers, chosenTargets, prev
         process.exit(1);
       }
 
+      // Every existing instance for this pair survives the diff regardless of
+      // choice -- "reconfigure" only changes its stored config, and
+      // "new-instance" adds one more alongside these.
+      for (const entry of previousEntries) {
+        raw.push({ absPath, serverId: entry.serverId, templateId: entry.templateId || templateId });
+      }
+
       if (choice === "skip") {
-        raw.push({ absPath, serverId: templateId, templateId });
         continue;
       }
 
       if (choice === "reconfigure") {
-        raw.push({ absPath, serverId: templateId, templateId });
-        const template = templates.find((t) => t.id === templateId);
+        let target = previousEntries[0];
+        if (previousEntries.length > 1) {
+          const picked = await clack.select({
+            message: "Which instance of " + templateId + " would you like to reconfigure?",
+            options: previousEntries.map((entry) => ({ value: entry, label: entry.serverId })),
+          });
+          if (clack.isCancel(picked)) {
+            clack.cancel("Cancelled.");
+            process.exit(1);
+          }
+          target = picked;
+        }
+        const template = templates.find((t) => t.id === (target.templateId || templateId));
         if (dryRun) {
-          reconfigured.push({ absPath, serverId: templateId, status: "dry-run" });
+          reconfigured.push({ absPath, serverId: target.serverId, status: "dry-run" });
           continue;
         }
         clack.log.step("Reconfiguring " + template.label + " at " + absPath);
         const { answers } = await promptForPlaceholders(template);
         const configOverride = applyPlaceholderValues(template.config, answers);
-        reconfigured.push({ absPath, serverId: templateId, configOverride });
+        reconfigured.push({ absPath, serverId: target.serverId, configOverride });
         continue;
       }
 
-      // new-instance: keep the existing entry, add a second one under a new name
-      raw.push({ absPath, serverId: templateId, templateId });
+      // new-instance: keep the existing entries, add a second one under a new name
       let instanceName;
       let spec = null;
       while (spec === null) {
@@ -453,7 +504,6 @@ async function runInstallFlow(parsed) {
 
   const templates = await loadTemplates();
   const previousSelections = await getCurrentSelections({ dir });
-  const previousKeys = new Set(previousSelections.map((s) => s.absPath + "::" + s.serverId));
 
   const externallyManaged = await findExternallyManagedEntries({ dir, groups, templates });
   const externallyManagedKeys = new Set(externallyManaged.map((e) => e.absPath + "::" + e.serverId));
@@ -515,7 +565,8 @@ async function runInstallFlow(parsed) {
       clack.log.error(err.message);
       process.exit(1);
     }
-    newSelections = raw.filter((s) => !externallyManagedKeys.has(s.absPath + "::" + s.serverId));
+    const merged = mergeWithPrevious({ previousSelections, newSelections: raw, prune: parsed.prune });
+    newSelections = merged.filter((s) => !externallyManagedKeys.has(s.absPath + "::" + s.serverId));
   } else {
     const serverOptions = templates.map((template) => ({
       value: template.id,

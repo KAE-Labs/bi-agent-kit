@@ -53,7 +53,8 @@ Picks an already-installed entry from a list and re-runs its setup walkthrough i
 | Flag | What it does |
 |---|---|
 | `--dry-run` | Preview exactly what `init`/`configure`/`reconfigure` would write or remove; nothing is touched and no setup questions are asked |
-| `--servers <ids>` | Non-interactive: comma-separated server specs to install (e.g. `--servers powerbi,fabric`), skipping the picker |
+| `--servers <ids>` | Non-interactive: comma-separated server specs to install (e.g. `--servers powerbi,fabric`), skipping the picker. Adds or updates the listed servers without touching any others already installed |
+| `--prune` | With `--servers`, remove anything not listed instead of only adding/updating (full-sync semantics) |
 | `--targets <ids>` | With `--servers`, restrict installation to specific target ids |
 | `--yes` | Skip confirmation prompts (never auto-runs installers) |
 | `--json` | Machine-readable output for `list` and `doctor` |
@@ -64,7 +65,7 @@ Non-interactive mode never prompts for setup values: placeholder tokens are left
 
 ### Instances -- multiple environments or accounts of the same server
 
-A server spec is either a plain template id (`dataverse`) or `templateId:instanceName` (`dataverse:dev`), where `instanceName` is letters, numbers, and hyphens. Each named instance gets its own key in the config file (`dataverse-dev`, `dataverse-prod`, ...) and its own entry in the manifest, so it can be configured, reconfigured, and removed independently of any other instance of the same server.
+A server spec is either a plain template id (`dataverse`) or `templateId:instanceName` (`dataverse:dev`), where `instanceName` is letters, numbers, and hyphens. Each named instance gets its own key in the config file (`dataverse-dev`, `dataverse-prod`, ...) and its own entry in the manifest, so it can be configured, reconfigured, and removed independently of any other instance of the same server. `configure` preserves existing instances by default -- pass `--prune` if you want it to remove any instance not listed in `--servers`.
 
 ```
 npx bi-agent-kit init --servers dataverse:dev,dataverse:prod
