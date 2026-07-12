@@ -1,0 +1,42 @@
+{
+  "catalog": [
+    "Azure",
+    "Azure DevOps",
+    "Azure Kubernetes Service (AKS)",
+    "Azure Resource Manager",
+    "GitHub",
+    "GitHub Awesome-Copilot",
+    "Markitdown",
+    "Microsoft 365 Agents Toolkit",
+    "Microsoft 365 Calendar",
+    "Microsoft 365 Copilot Chat",
+    "Microsoft 365 Mail",
+    "Microsoft 365 User",
+    "Microsoft Admin Center",
+    "Microsoft Clarity",
+    "Microsoft Dataverse",
+    "Microsoft Dev Box",
+    "Microsoft Fabric (Public Preview)",
+    "Microsoft Fabric Real-Time Intelligence",
+    "Microsoft Foundry",
+    "Microsoft Learn",
+    "Microsoft MCP Server for Enterprise",
+    "Microsoft SQL",
+    "Microsoft Sentinel Data Exploration",
+    "Microsoft Teams",
+    "Microsoft Word",
+    "NuGet MCP Server",
+    "OneDrive and SharePoint",
+    "Playwright",
+    "SharePoint Lists",
+    "Wassette"
+  ],
+  "majors": {
+    "npm:@azure/mcp": "3",
+    "npm:@microsoft/dataverse": "1",
+    "pypi:dbt-mcp": "1",
+    "npm:@microsoft/fabric-mcp": "1",
+    "pypi:postgres-mcp": "0",
+    "npm:@microsoft/powerbi-modeling-mcp": "0"
+  }
+}
