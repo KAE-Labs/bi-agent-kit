@@ -41,3 +41,24 @@ jobs:
       # OIDC-scoped job (deps are exercised in the test job above instead).
       - run: npm ci --ignore-scripts
       - run: npm publish
+
+  # Mirror to GitHub Packages (requires an owner-scoped name). The npm
+  # registry remains canonical; this copy gives repo-sidebar visibility.
+  publish-github:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: https://npm.pkg.github.com
+      - run: npm ci --ignore-scripts
+      - name: Scope package name for GitHub Packages
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.name='@kae-labs/bi-agent-kit';fs.writeFileSync('package.json',JSON.stringify(p,null,2));"
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
