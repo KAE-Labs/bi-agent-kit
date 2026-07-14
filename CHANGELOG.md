@@ -3,6 +3,16 @@
 All notable changes to bi-agent-kit are documented here. The format follows
 Keep a Changelog, and the project follows semantic versioning.
 
+## 0.1.1 - 2026-07-13
+
+### Fixed
+
+- Interactive `init` / `configure` no longer completes silently when servers
+  are selected but no config file is chosen to install into. The target
+  prompt now warns that nothing would be written (and no setup steps would
+  run), then re-prompts, with a confirmation escape hatch for the rare case
+  of intentionally installing nothing.
+
 ## 0.1.0 - 2026-07-12
 
 Initial public release.
