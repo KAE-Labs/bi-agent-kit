@@ -59,6 +59,9 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Scope package name for GitHub Packages
         run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.name='@kae-labs/bi-agent-kit';fs.writeFileSync('package.json',JSON.stringify(p,null,2));"
-      - run: npm publish
+      # --no-provenance: provenance attestation lives on the canonical npm
+      # publish (which has id-token: write); this mirror job only holds
+      # packages: write, so npm's provenance generation would EUSAGE here.
+      - run: npm publish --provenance=false
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
