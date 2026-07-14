@@ -690,15 +690,37 @@ async function runInstallFlow(parsed) {
       value: group.absPath,
       label: labelForTargetIds(group.targetIds) + " (" + group.absPath + ")",
     }));
-    const chosenTargets = await clack.multiselect({
-      message: "Select which detected config files to install into",
-      options: targetOptions,
-      initialValues: groups.map((g) => g.absPath).filter((absPath) => previousAbsPaths.has(absPath)),
-      required: false,
-    });
-    if (clack.isCancel(chosenTargets)) {
-      clack.cancel("Cancelled.");
-      process.exit(1);
+    let chosenTargets;
+    // Re-prompt loop: selecting no target when servers ARE chosen installs
+    // nothing (raw = chosenServers x chosenTargets, empty targets => empty),
+    // which is almost never intended -- warn and re-ask, with a confirm escape
+    // hatch so a user who really wants to write nothing can still proceed.
+    for (;;) {
+      chosenTargets = await clack.multiselect({
+        message: "Select which detected config files to install into",
+        options: targetOptions,
+        initialValues: groups.map((g) => g.absPath).filter((absPath) => previousAbsPaths.has(absPath)),
+        required: false,
+      });
+      if (clack.isCancel(chosenTargets)) {
+        clack.cancel("Cancelled.");
+        process.exit(1);
+      }
+      if (chosenServers.length === 0 || chosenTargets.length > 0) break;
+
+      clack.log.warn(
+        "You selected " + chosenServers.length + " server(s) but no config file to install into -- " +
+          "nothing would be written and no setup steps would run."
+      );
+      const proceedAnyway = await clack.confirm({
+        message: "Install nothing and exit?",
+        initialValue: false,
+      });
+      if (clack.isCancel(proceedAnyway)) {
+        clack.cancel("Cancelled.");
+        process.exit(1);
+      }
+      if (proceedAnyway) break;
     }
 
     const { raw, reconfigured } = await resolveInteractiveSelections({
