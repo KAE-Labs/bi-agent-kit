@@ -35,7 +35,7 @@
   "majors": {
     "npm:@azure/mcp": "3",
     "npm:@microsoft/dataverse": "1",
-    "pypi:dbt-mcp": "1",
+    "pypi:dbt-mcp": "2",
     "npm:@microsoft/fabric-mcp": "1",
     "pypi:postgres-mcp": "0",
     "npm:@microsoft/powerbi-modeling-mcp": "0"
