@@ -33,7 +33,7 @@
     "Wassette"
   ],
   "majors": {
-    "npm:@azure/mcp": "3",
+    "npm:@azure/mcp": "4",
     "npm:@microsoft/dataverse": "1",
     "pypi:dbt-mcp": "2",
     "npm:@microsoft/fabric-mcp": "1",
