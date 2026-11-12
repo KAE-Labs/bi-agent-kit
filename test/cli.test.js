@@ -2,6 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseArgs, VALID_COMMANDS, findPreviousEntriesForPair, previousTemplateIds, targetsOutsideFilter } from "../bin/cli.js";
 import { parseServerSpec } from "../lib/commands.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 test("parseArgs defaults to the init command with dry run false", () => {
   const result = parseArgs(["node", "cli.js"]);
@@ -445,4 +449,15 @@ test("parseArgs still accepts --servers= and --out= forms unaffected by the valu
   const result = parseArgs(["node", "cli.js", "configure", "--servers=powerbi"]);
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.servers, ["powerbi"]);
+});
+
+test("bi-agent-kit --version and -v print the package.json version and exit 0", async () => {
+  const run = promisify(execFile);
+  const cliPath = fileURLToPath(new URL("../bin/cli.js", import.meta.url));
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  for (const flag of ["--version", "-v"]) {
+    const { stdout, stderr } = await run(process.execPath, [cliPath, flag]);
+    assert.equal(stdout, pkg.version + "\n");
+    assert.equal(stderr, "");
+  }
 });
